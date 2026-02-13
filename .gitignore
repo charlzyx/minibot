@@ -20,6 +20,10 @@ sessions/
 memory/
 skills/
 
+# Documentation (should be versioned)
+# docs/
+# docs/**/*
+
 # Test files
 test/
 test-*.ts
