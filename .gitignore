@@ -1,6 +1,40 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+package-lock.json
+
+# Database
+db/*.db
+db/*.db-shm
+db/*.db-wal
+
+# Config
+config/
+
+# Workspaces
+workspaces/
+
+# Test files
+test/
+test-*.ts
+
+# Logs
+logs/
 *.log
+
+# Environment
 .env
-.env.*
-!.gitignore
+.env.local
+
+# Build
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+test.txt

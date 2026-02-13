@@ -4,10 +4,27 @@ interface LLMParams {
   provider?: string
   model?: string
   messages?: Array<{
-    role: 'system' | 'user' | 'assistant'
+    role: 'system' | 'user' | 'assistant' | 'tool'
     content: string
+    tool_call_id?: string
+    tool_calls?: Array<{
+      id: string
+      type: 'function'
+      function: {
+        name: string
+        arguments: string
+      }
+    }>
   }>
   prompt?: string
+  tools?: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description: string
+      parameters: Record<string, any>
+    }
+  }>
 }
 
 export interface LLMResult {
@@ -18,12 +35,28 @@ export interface LLMResult {
     output_tokens: number
   }
   finish_reason?: string
+  tool_calls?: Array<{
+    id: string
+    type: 'function'
+    function: {
+      name: string
+      arguments: string
+    }
+  }>
 }
 
 interface ChatResponse {
   choices: Array<{
     message: {
-      content: string
+      content?: string
+      tool_calls?: Array<{
+        id: string
+        type: 'function'
+        function: {
+          name: string
+          arguments: string
+        }
+      }>
     }
     finish_reason: string
   }>
@@ -48,20 +81,19 @@ class LLM {
     try {
       const config = await this.configManager.loadConfig()
       
-      // Use provided parameters or fall back to config
       const provider = params.provider || config.provider.name
       const model = params.model || config.model.name
       const messages = params.messages || []
+      const tools = params.tools
       
       console.log(`[LLM] Executing with provider: ${provider}, model: ${model}`)
       
-      // Handle different providers
       switch (provider.toLowerCase()) {
         case 'zhipu':
         case 'zhipuai':
-          return this.executeZhipu(model, messages, config)
+          return this.executeZhipu(model, messages, config, tools)
         case 'openai':
-          return this.executeOpenAI(model, messages, config)
+          return this.executeOpenAI(model, messages, config, tools)
         default:
           throw new LLMError(`Unsupported provider: ${provider}`)
       }
@@ -71,7 +103,7 @@ class LLM {
     }
   }
 
-  private async executeZhipu(model: string, messages: Array<{ role: string; content: string }>, config: any): Promise<LLMResult> {
+  private async executeZhipu(model: string, messages: Array<{ role: string; content: string; tool_call_id?: string; tool_calls?: any[] }>, config: any, tools?: any[]): Promise<LLMResult> {
     const zhipuConfig = config.provider
     const apiKey = zhipuConfig.apiKey
     const baseURL = zhipuConfig.apiBase || 'https://open.bigmodel.cn/api/coding/paas/v4'
@@ -87,18 +119,24 @@ class LLM {
       console.log('[LLM] WARNING: Using test API Key!')
     }
     
+    const requestBody: any = {
+      model: model,
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: config.model.maxTokens || 1024
+    }
+    
+    if (tools && tools.length > 0) {
+      requestBody.tools = tools
+    }
+    
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: model,
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: config.model.maxTokens || 1024
-      })
+      body: JSON.stringify(requestBody)
     })
     
     if (!response.ok) {
@@ -118,11 +156,12 @@ class LLM {
       content: choice.message?.content || '',
       model: data.model || model,
       usage: data.usage,
-      finish_reason: choice.finish_reason
+      finish_reason: choice.finish_reason,
+      tool_calls: choice.message?.tool_calls
     }
   }
 
-  private async executeOpenAI(model: string, messages: Array<{ role: string; content: string }>, config: any): Promise<LLMResult> {
+  private async executeOpenAI(model: string, messages: Array<{ role: string; content: string; tool_call_id?: string; tool_calls?: any[] }>, config: any, tools?: any[]): Promise<LLMResult> {
     const openaiConfig = config.provider
     const apiKey = openaiConfig.apiKey
     const baseURL = openaiConfig.baseURL || 'https://api.openai.com/v1'
@@ -133,18 +172,24 @@ class LLM {
     
     console.log('[LLM] Using OpenAI API:', baseURL)
     
+    const requestBody: any = {
+      model: model,
+      messages: messages,
+      temperature: 0.7,
+      max_tokens: config.model.maxTokens || 1024
+    }
+    
+    if (tools && tools.length > 0) {
+      requestBody.tools = tools
+    }
+    
     const response = await fetch(`${baseURL}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
-      body: JSON.stringify({
-        model: model,
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: config.model.maxTokens || 1024
-      })
+      body: JSON.stringify(requestBody)
     })
     
     if (!response.ok) {
@@ -164,7 +209,8 @@ class LLM {
       content: choice.message?.content || '',
       model: data.model || model,
       usage: data.usage,
-      finish_reason: choice.finish_reason
+      finish_reason: choice.finish_reason,
+      tool_calls: choice.message?.tool_calls
     }
   }
 }

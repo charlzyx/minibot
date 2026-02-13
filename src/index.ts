@@ -268,7 +268,7 @@ async function initializeFeishuWS() {
             })
             
             console.log('[Feishu] 📤 Sending reply...')
-            await feishuChannel.sendCardMessage(response, userId)
+            await feishuChannel.sendCardMessage(response, userId, messageId)
             console.log('[Feishu] ✅ Reply sent successfully!')
           } catch (error) {
             console.error('[Feishu] ❌ Failed to reply:', error)

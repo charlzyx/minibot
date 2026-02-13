@@ -37,7 +37,7 @@ export class FeishuChannel {
     })
   }
 
-  async sendMessage(content: string, receiveId: string): Promise<{ message_id: string; data: any }> {
+  async sendMessage(content: string, receiveId: string, parentId?: string): Promise<{ message_id: string; data: any }> {
     const result = await this.client.im.message.create({
       params: {
         receive_id_type: 'open_id'
@@ -47,7 +47,8 @@ export class FeishuChannel {
         content: JSON.stringify({
           text: content
         }),
-        msg_type: 'text'
+        msg_type: 'text',
+        ...(parentId && { reply_in_thread: { message_id: parentId } })
       }
     })
 
@@ -65,7 +66,7 @@ export class FeishuChannel {
     }
   }
 
-  async sendCardMessage(content: string, receiveId: string): Promise<{ message_id: string; data: any }> {
+  async sendCardMessage(content: string, receiveId: string, parentId?: string): Promise<{ message_id: string; data: any }> {
     const card = {
       config: { wide_screen_mode: true },
       elements: [
@@ -83,7 +84,8 @@ export class FeishuChannel {
       data: {
         receive_id: receiveId,
         content: JSON.stringify(card),
-        msg_type: 'interactive'
+        msg_type: 'interactive',
+        ...(parentId && { reply_in_thread: { message_id: parentId } })
       }
     })
 

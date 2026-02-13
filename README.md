@@ -9,24 +9,26 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 - 🚀 **Fast & Lightweight** - Hono framework for maximum performance
 - 🔒 **Type-Safe** - Full TypeScript coverage
 - 💾 **Persistent Memory** - SQLite based long-term storage
-- 🔌 **Multiple LLM Providers** - OpenAI, DeepSeek, Dashscope, Qwen, etc.
-- 💬 **Multi-Platform** - Feishu, WeChat, DingTalk, QQ, Discord, Slack
+- 🔌 **Multiple LLM Providers** - Zhipu, OpenAI, DeepSeek, Dashscope, Qwen, etc.
+- 💬 **Multi-Platform** - Feishu with reply reference support
 - 🛠️ **Tool System** - Built-in tools with easy extension
-- ⏰ **Scheduled Tasks** - Cron-based task execution
-- 🔍 **Agent Network** - Link with other agents for collaboration
+- ⏰ **Scheduled Tasks** - Cron-based task execution with workspace isolation
+- 🤖 **Subagent Architecture** - Distributed task execution and load balancing
+- 🔍 **Error Handling** - Intelligent error classification and retry mechanisms
 
 ## 🏗️ Architecture
 
 ```
 ┌────────────────────────────────────────────────┐
 │                 Client Layer                 │
-│            Feishu / WeChat / etc            │
+│            Feishu (WebSocket)              │
 └────────────────────────────────────────────────┘
                       │
                       ↓
 ┌────────────────────────────────────────────────┐
 │              Hono Server (API)            │
-│         /chat  /events  /tools          │
+│         /api/health  /api/chat           │
+│         /api/memory  /api/tools           │
 └────────────────────────────────────────────────┘
                       │
                       ↓
@@ -35,13 +37,17 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 │    Loop / Context / Memory / Tools      │
 └────────────────────────────────────────────────┘
                       │
-                      ↓
-┌────────────────────────────────────────────────┐
-│            Channel Adapters              │
-│  Feishu / WeChat / DingTalk / QQ     │
-└────────────────────────────────────────────────┘
+          ┌───────────┴───────────┐
+          │                       │
+          ▼                       ▼
+    ┌─────────┐           ┌─────────┐
+    │  Tools  │           │  Cron   │
+    │  System  │           │Scheduler │
+    └─────────┘           └─────────┘
+          │                       │
+          └───────────┬───────────┘
                       │
-                      ↓
+                      ▼
 ┌────────────────────────────────────────────────┐
 │              Memory & Storage              │
 │              SQLite / Config                │
@@ -55,36 +61,44 @@ minibot/
 ├── src/
 │   ├── index.ts              # Hono app entry point
 │   ├── agent/              # Core agent logic
-│   │   ├── context.ts      # Prompt builder
-│   │   ├── loop.ts         # Agent main loop (LLM ↔ tools)
-│   │   ├── memory.ts       # Long-term memory management
-│   │   └── tools.ts        # Tool registry & execution
-│   ├── channels/          # Chat platform integrations
-│   │   ├── feishu.ts      # Feishu (WebSocket)
-│   │   ├── wechat.ts       # WeChat (HTTP)
-│   │   ├── dingtalk.ts     # DingTalk (Stream)
-│   │   └── qq.ts          # QQ (Bot + Webhook)
-│   ├── tools/             # Built-in tools
-│   │   ├── shell.ts       # Shell command execution
+│   │   ├── index.ts        # Agent implementation
+│   │   └── DESIGN.md       # Agent design documentation
+│   ├── channels/           # Chat platform integrations
+│   │   ├── feishu.ts      # Feishu (WebSocket) with reply reference
+│   │   └── DESIGN.md       # Channels design documentation
+│   ├── tools/              # Built-in tools
+│   │   ├── file.ts         # File operations
+│   │   ├── shell.ts        # Shell command execution
 │   │   ├── web.ts         # HTTP requests
-│   │   ├── file.ts        # File operations
-│   │   └── index.ts
-│   ├── memory/            # Persistent memory (SQLite)
-│   ├── config/            # Configuration management
-│   │   ├── schema.ts      # Config validation with Zod
-│   │   └── manager.ts     # Config load/save
-│   └── session/           # Session management
-├── tests/
-│   ├── agent/
-│   ├── channels/
-│   └── tools/
+│   │   ├── llm.ts         # LLM API calls
+│   │   ├── index.ts        # Tool registry
+│   │   └── DESIGN.md      # Tools design documentation
+│   ├── memory/             # Persistent memory (SQLite)
+│   │   ├── manager.ts      # Memory manager implementation
+│   │   └── DESIGN.md      # Memory design documentation
+│   ├── config/             # Configuration management
+│   │   ├── manager.ts      # Config manager
+│   │   ├── schema.ts      # Config schema
+│   │   └── DESIGN.md      # Config design documentation
+│   ├── cron/               # Scheduled task system
+│   │   ├── parser.ts       # Cron expression parser
+│   │   ├── executor.ts     # Shell script executor
+│   │   ├── workspace.ts    # Workspace isolation system
+│   │   ├── subagent.ts     # Subagent manager
+│   │   ├── error-handler.ts # Error handling and retry
+│   │   ├── scheduler.ts    # Cron scheduler
+│   │   ├── config.ts       # Configuration examples
+│   │   ├── index.ts        # Module exports
+│   │   └── DESIGN.md      # Cron design documentation
+│   └── cron-demo.ts        # Cron system demo
 ├── db/
-│   └── memory.db            # SQLite database (gitignored)
-├── config/
-│   └── config.json         # User configuration (gitignored)
+│   └── memory.db          # SQLite database (gitignored)
+├── workspaces/            # Task workspaces (gitignored)
 ├── package.json
 ├── tsconfig.json
-└── README.md
+├── README.md              # This file
+├── CRON_README.md        # Cron system documentation
+└── CRON_DEPLOYMENT.md    # Cron deployment guide
 ```
 
 ## 🚀 Quick Start
@@ -99,35 +113,19 @@ npm install
 
 ### Configuration
 
-Create `config/config.json`:
+Create `.env` file:
 
-```json
-{
-  "provider": {
-    "name": "openai",
-    "apiKey": "sk-or-v1-xxx"
-  },
-  "model": {
-    "name": "gpt-4o",
-    "maxTokens": 4000,
-    "temperature": 0.7
-  },
-  "channels": {
-    "feishu": {
-      "enabled": true,
-      "appId": "cli_xxx",
-      "appSecret": "xxx"
-    }
-  },
-  "tools": {
-    "shell": {
-      "enabled": true
-    },
-    "web": {
-      "enabled": true
-    }
-  }
-}
+```env
+# Zhipu LLM
+ZHIPU_API_KEY=your_api_key
+ZHIPU_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
+
+# Feishu
+FEISHU_APP_ID=your_app_id
+FEISHU_APP_SECRET=your_app_secret
+
+# Server
+PORT=18790
 ```
 
 ### Development
@@ -136,7 +134,7 @@ Create `config/config.json`:
 # Install dependencies
 npm install
 
-# Run dev server (with hot reload)
+# Run dev server
 npm run dev
 
 # Build
@@ -145,164 +143,205 @@ npm run build
 # Run production server
 npm run start
 
-# Run tests
-npm test
+# Run cron demo
+npm run build
+node dist/cron-demo.js
 ```
 
 ## 🎯 Core Modules
 
 ### Agent Core
 
+The Agent is the core intelligence unit that processes user messages, calls tools, and generates responses.
+
+**Features**:
+- Message processing and intent analysis
+- Tool selection and execution
+- Context management
+- Response generation
+
+**Documentation**: [Agent Design](src/agent/DESIGN.md)
+
+### Channels
+
+Channels module integrates with external messaging platforms.
+
+**Features**:
+- Feishu WebSocket integration
+- Message deduplication
+- Auto reaction (👍)
+- Reply reference support
+- Card messages
+
+**Documentation**: [Channels Design](src/channels/DESIGN.md)
+
+### Tools
+
+Tools module provides executable operations that can be called by the Agent.
+
+**Available Tools**:
+- **File Tool**: Read, write, append, edit, delete files
+- **Shell Tool**: Execute shell commands with timeout and environment variables
+- **Web Tool**: Make HTTP requests (GET, POST, PUT, DELETE)
+- **LLM Tool**: Call LLM APIs for conversation generation
+
+**Documentation**: [Tools Design](src/tools/DESIGN.md)
+
+### Memory
+
+Memory module provides persistent storage using SQLite.
+
+**Features**:
+- SQLite-based storage
+- Tag system for categorization
+- Content search with fuzzy matching
+- Recent memories retrieval
+- Embedding vector support (for future semantic search)
+
+**Documentation**: [Memory Design](src/memory/DESIGN.md)
+
+### Config
+
+Config module manages application configuration.
+
+**Features**:
+- Environment variable loading
+- Database persistence
+- Configuration validation
+- Dynamic updates
+
+**Documentation**: [Config Design](src/config/DESIGN.md)
+
+### Cron Scheduler
+
+Cron module provides a complete scheduled task system.
+
+**Features**:
+- Cron expression parsing (5-segment and 6-segment)
+- Shell script execution
+- Workspace isolation
+- Subagent architecture for distributed execution
+- Error handling and retry mechanisms
+- Task priority management
+
+**Documentation**: [Cron Design](src/cron/DESIGN.md) | [Cron README](CRON_README.md) | [Cron Deployment](CRON_DEPLOYMENT.md)
+
+## 📱 Feishu Integration
+
+### Features
+
+- ✅ WebSocket real-time communication
+- ✅ Message deduplication
+- ✅ Auto reaction (👍)
+- ✅ Reply reference support
+- ✅ Card messages
+- ✅ Private and group chat support
+
+### Usage
+
 ```typescript
-// Agent Loop
-async function agentLoop(message: string, context: AgentContext) {
-  // 1. Analyze message
-  const intent = await analyzeIntent(message, context)
-  
-  // 2. Plan tasks
-  const tasks = await planTasks(intent, context)
-  
-  // 3. Execute tools
-  const results = await executeTools(tasks, context)
-  
-  // 4. Build response
-  const response = await buildResponse(results, context)
-  
-  // 5. Update memory
-  await updateMemory(context, results)
-  
-  return response
-}
-```
+import { startFeishuWS, FeishuChannel } from './channels/feishu'
 
-### Memory System
-
-```typescript
-// Long-term memory with SQLite
-interface Memory {
-  id: string
-  content: string
-  embedding?: number[]
-  tags: string[]
-  createdAt: Date
-  updatedAt: Date
-}
-
-async function searchMemory(query: string): Promise<Memory[]> {
-  // Semantic search with embeddings
-}
-
-async function storeMemory(content: string, tags: string[]) {
-  // Store with timestamp and embeddings
-}
-```
-
-### Tool System
-
-```typescript
-interface Tool {
-  name: string
-  description: string
-  execute: (params: any) => Promise<any>
-}
-
-// Built-in tools
-const tools: Record<string, Tool> = {
-  shell: {
-    name: "shell",
-    description: "Execute shell commands",
-    execute: async ({ command }) => spawnProcess(command)
-  },
-  web: {
-    name: "web",
-    description: "Make HTTP requests",
-    execute: async ({ url, method, data }) => fetch(url, { method, body: JSON.stringify(data) })
-  },
-  file: {
-    name: "file",
-    description: "Read/write files in workspace",
-    execute: async ({ path, action, content }) => fileAction(path, action, content)
-  }
-}
-```
-
-## 📱 Chat Platforms
-
-### Feishu (Priority - WebSocket)
-
-```typescript
-// FeishuChannel
-const feishu = new FeishuChannel({
+// Start WebSocket
+startFeishuWS({
   appId: process.env.FEISHU_APP_ID,
   appSecret: process.env.FEISHU_APP_SECRET
-})
-
-// Long connection - no public IP
-await feishu.connect({
-  mode: 'long'
+}, async (message) => {
+  console.log('Received:', message.content)
+  
+  const channel = new FeishuChannel(config)
+  // Reply with reference to original message
+  await channel.sendCardMessage('Reply content', message.sender_id?.open_id, message.message_id)
 })
 ```
 
-### WeChat (HTTP + Webhook)
+## ⏰ Cron Scheduler
+
+### Quick Start
 
 ```typescript
-// WeChatChannel
-const wechat = new WeChatChannel({
-  appId: process.env.WECHAT_APP_ID,
-  appSecret: process.env.WECHAT_APP_SECRET
+import { CronScheduler, ErrorHandler } from './cron'
+
+const scheduler = new CronScheduler({
+  checkInterval: 1000,
+  workspaceBasePath: './workspaces',
+  enableSubagent: true
 })
 
-// Receive via webhook
-app.post('/wechat/webhook', async (c) => {
-  await wechat.handleMessage(c.body)
-})
-```
+await scheduler.start()
 
-### DingTalk (Stream Mode)
-
-```typescript
-// DingTalkChannel
-const dingtalk = new DingTalkChannel({
-  clientId: process.env.DINGTALK_CLIENT_ID,
-  clientSecret: process.env.DINGTALK_CLIENT_SECRET
-})
-
-// Stream mode - no public IP
-await dingtalk.connect({
-  mode: 'stream'
+await scheduler.addJob({
+  name: 'Daily Backup',
+  cronExpression: '0 2 * * *',
+  command: 'bash',
+  args: ['scripts/backup.sh'],
+  enabled: true,
+  priority: ErrorHandler.getPriority('high'),
+  timeout: 600000,
+  maxRetries: 3
 })
 ```
+
+### Cron Expression Examples
+
+- `0 2 * * *` - Daily at 2 AM
+- `*/5 * * * *` - Every 5 minutes
+- `0 0 * * 0` - Weekly on Sunday midnight
+- `0 0 1 * *` - Monthly on 1st midnight
+- `0 9-17 * * 1-5` - Weekdays 9 AM - 5 PM hourly
+- `0 */30 * * * *` - Every 30 seconds (6-segment)
+
+For more details, see [Cron README](CRON_README.md)
 
 ## 🔧 Configuration
 
-### Provider Configuration
+### Environment Variables
 
-```typescript
-interface ProviderConfig {
-  name: 'openai' | 'deepseek' | 'dashscope' | 'qwen' | 'zhipu'
-  apiKey: string
-  apiBase?: string
-  baseUrl?: string
-}
+```env
+# LLM Provider
+ZHIPU_API_KEY=your_api_key
+ZHIPU_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 
-interface ModelConfig {
-  name: string
-  maxTokens: number
-  temperature: number
-  topP?: number
-}
+# Feishu
+FEISHU_APP_ID=your_app_id
+FEISHU_APP_SECRET=your_app_secret
+
+# Server
+PORT=18790
+NODE_ENV=development
 ```
 
-### Channel Configuration
+### Config Structure
 
 ```typescript
-interface ChannelConfig {
-  feishu?: FeishuConfig
-  wechat?: WeChatConfig
-  dingtalk?: DingTalkConfig
-  qq?: QQConfig
-  discord?: DiscordConfig
-  slack?: SlackConfig
+interface Config {
+  provider: {
+    name: string
+    apiKey: string
+    apiBase?: string
+  }
+  model: {
+    name: string
+    maxTokens?: number
+    temperature?: number
+  }
+  channels: {
+    feishu: {
+      enabled: boolean
+      appId: string
+      appSecret: string
+    }
+  }
+  tools: {
+    file: { enabled: boolean }
+    shell: { enabled: boolean }
+    web: { enabled: boolean }
+    llm: { enabled: boolean }
+  }
+  server: {
+    port: number
+    cors: boolean
+  }
 }
 ```
 
@@ -310,9 +349,9 @@ interface ChannelConfig {
 
 - **Workspace Isolation** - Restricted access to workspace directory
 - **Command Validation** - Shell command validation before execution
-- **API Key Protection** - Encrypted storage with Zod validation
+- **API Key Protection** - Environment variable storage
 - **Content Filtering** - Input validation on all incoming messages
-- **Rate Limiting** - Per-user rate limits on all channels
+- **Message Deduplication** - Prevent duplicate message processing
 
 ## 📊 Performance
 
@@ -326,10 +365,10 @@ interface ChannelConfig {
 
 Contributions are welcome! Please feel free to:
 
-1. Fork the repository
+1. Fork repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
 ## 📄 License
@@ -346,14 +385,28 @@ Inspired by:
 ## 📞 Comparison: nanobot vs minibot
 
 | Feature | nanobot | minibot |
-|--------|---------|---------|
+|---------|----------|----------|
 | Language | Python | TypeScript |
 | Framework | Custom | Hono |
-| Memory | Custom | SQLite |
+| Memory | Text files (JSONL) | SQLite |
 | Type Safety | Dynamic | Static (TS) |
 | Performance | Excellent | Excellent |
+| Cron System | ✅ | ✅ (Enhanced) |
+| Workspace Isolation | ✅ | ✅ |
+| Subagent Architecture | ✅ | ✅ |
+| Reply Reference | ❌ | ✅ |
 | Learning Curve | Medium | Low |
-| Deployment | Pip/uv | NPM |
+
+## 📚 Documentation
+
+- [Agent Design](src/agent/DESIGN.md) - Core agent architecture
+- [Channels Design](src/channels/DESIGN.md) - Messaging platform integration
+- [Tools Design](src/tools/DESIGN.md) - Tool system documentation
+- [Memory Design](src/memory/DESIGN.md) - Memory management
+- [Config Design](src/config/DESIGN.md) - Configuration system
+- [Cron Design](src/cron/DESIGN.md) - Scheduled task system
+- [Cron README](CRON_README.md) - Cron system user guide
+- [Cron Deployment](CRON_DEPLOYMENT.md) - Cron deployment instructions
 
 ---
 
