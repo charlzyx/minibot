@@ -147,20 +147,14 @@ export class Agent {
   private buildSystemPrompt(config: Config): string {
     return `You are an AI assistant that helps users solve problems.
 
-You have access to the following tools:
+You have access to following tools:
 - shell: Execute shell commands
 - web: Make HTTP requests
 - file: File operations (read, write, append, delete, list)
 - llm: Large language model for generating text
+- memory: Memory management - store, search, get, delete, and retrieve recent memories
 
-When you need to use a tool, respond with a tool call in the format:
-{
-  "name": "tool_name",
-  "arguments": {
-    "param1": "value1",
-    "param2": "value2"
-  }
-}
+When you need to use a tool, respond with a tool call in the format expected by the API.
 
 Configuration:
 - Model: ${config.model.name}

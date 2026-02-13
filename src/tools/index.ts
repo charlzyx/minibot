@@ -3,16 +3,19 @@ import shellTool from './shell'
 import webTool from './web'
 import fileTool from './file'
 import llmTool from './llm'
+import memoryTool from './memory'
 import type { ShellResult } from './shell'
 import type { WebResult } from './web'
 import type { FileResult } from './file'
 import type { LLMResult } from './llm'
+import type { MemoryResult } from './memory'
 
 // Re-export all tools
 export * from './shell'
 export * from './web'
 export * from './file'
 export * from './llm'
+export * from './memory'
 
 // Tool interface
 interface Tool {
@@ -146,6 +149,45 @@ export function getTools(): Record<string, Tool> {
       },
       execute: async (params: any) => {
         return llmTool.execute(params)
+      }
+    },
+    memory: {
+      name: 'memory',
+      description: 'Memory management - store, search, get, delete, and retrieve recent memories',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['store', 'search', 'get', 'delete', 'recent'],
+            description: 'The memory operation to perform'
+          },
+          content: {
+            type: 'string',
+            description: 'Content to store (required for store action)'
+          },
+          query: {
+            type: 'string',
+            description: 'Search query (required for search action)'
+          },
+          id: {
+            type: 'number',
+            description: 'Memory ID (required for get and delete actions)'
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Tags for categorization (optional for store action)'
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results (optional for search and recent actions)'
+          }
+        },
+        required: ['action']
+      },
+      execute: async (params: any) => {
+        return memoryTool.execute(params)
       }
     }
   }

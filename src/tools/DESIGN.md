@@ -28,6 +28,12 @@ Tools 模块提供了一系列可由 Agent 调用的工具，用于执行各种�
     │   LLM    │
     │  Tool    │
     └─────────┘
+         │
+         ▼
+    ┌─────────┐
+    │ Memory   │
+    │  Tool    │
+    └─────────┘
 ```
 
 ## 核心工具
@@ -172,7 +178,74 @@ const result = await webTool.request('https://api.example.com/slow', {
 })
 ```
 
-### 4. LLM Tool
+### 4. Memory Tool
+
+负责记忆管理，支持存储、搜索、获取和删除记忆。
+
+**功能**：
+- 存储记忆（带标签）
+- 搜索记忆（内容匹配）
+- 获取指定记忆
+- 删除记忆
+- 获取最近记忆
+
+**接口**：
+```typescript
+interface MemoryTool {
+  execute(params: {
+    action: 'store' | 'search' | 'get' | 'delete' | 'recent'
+    content?: string
+    query?: string
+    id?: number
+    tags?: string[]
+    limit?: number
+  }): Promise<{
+    success: boolean
+    action: string
+    data?: any
+    error?: string
+  }>
+}
+```
+
+**使用示例**：
+```typescript
+const memoryTool = new MemoryTool()
+
+// 存储记忆
+const result = await memoryTool.execute({
+  action: 'store',
+  content: '用户喜欢编程和AI技术',
+  tags: ['user', 'preference']
+})
+
+// 搜索记忆
+const result = await memoryTool.execute({
+  action: 'search',
+  query: '编程',
+  limit: 5
+})
+
+// 获取指定记忆
+const result = await memoryTool.execute({
+  action: 'get',
+  id: 1
+})
+
+// 获取最近记忆
+const result = await memoryTool.execute({
+  action: 'recent',
+  limit: 10
+})
+
+// 删除记忆
+const result = await memoryTool.execute({
+  action: 'delete',
+  id: 1
+})
+```
+
+### 5. LLM Tool
 
 负责调用 LLM 生成对话。
 
@@ -181,22 +254,39 @@ const result = await webTool.request('https://api.example.com/slow', {
 - 支持多轮对话
 - 模型配置
 - 参数调整
+- 工具调用支持
 
 **接口**：
 ```typescript
 interface LLMTool {
-  chat(params: {
-    model: string
-    messages: Array<{ role: string; content: string }>
-    maxTokens?: number
-    temperature?: number
+  execute(params: {
+    provider?: string
+    model?: string
+    messages?: Array<{ role: string; content: string }>
+    tools?: Array<{
+      type: 'function'
+      function: {
+        name: string
+        description: string
+        parameters: Record<string, any>
+      }
+    }>
   }): Promise<{
     content: string
+    model: string
     usage?: {
-      promptTokens: number
-      completionTokens: number
-      totalTokens: number
+      input_tokens: number
+      output_tokens: number
     }
+    finish_reason?: string
+    tool_calls?: Array<{
+      id: string
+      type: 'function'
+      function: {
+        name: string
+        arguments: string
+      }
+    }>
   }>
 }
 ```
@@ -206,7 +296,7 @@ interface LLMTool {
 const llmTool = new LLMTool()
 
 // 单轮对话
-const result = await llmTool.chat({
+const result = await llmTool.execute({
   model: 'glm-4.7',
   messages: [
     { role: 'user', content: '你好' }
@@ -214,15 +304,22 @@ const result = await llmTool.chat({
 })
 
 // 多轮对话
-const result = await llmTool.chat({
+const result = await llmTool.execute({
   model: 'glm-4.7',
   messages: [
     { role: 'user', content: '我叫小明' },
     { role: 'assistant', content: '你好小明！' },
     { role: 'user', content: '我叫什么名字？' }
+  ]
+})
+
+// 带工具调用
+const result = await llmTool.execute({
+  model: 'glm-4.7',
+  messages: [
+    { role: 'user', content: '帮我查看当前目录的文件' }
   ],
-  maxTokens: 1000,
-  temperature: 0.7
+  tools: [/* 工具定义 */]
 })
 ```
 
@@ -235,12 +332,14 @@ import { FileTool } from './file'
 import { ShellTool } from './shell'
 import { WebTool } from './web'
 import { LLMTool } from './llm'
+import { MemoryTool } from './memory'
 
 export const tools = {
   file: new FileTool(),
   shell: new ShellTool(),
   web: new WebTool(),
-  llm: new LLMTool()
+  llm: new LLMTool(),
+  memory: new MemoryTool()
 }
 
 export function getTool(name: string) {
