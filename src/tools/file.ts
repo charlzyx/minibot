@@ -1,10 +1,11 @@
 import fs from 'fs/promises'
 import path from 'path'
 
-interface FileResult {
+export interface FileResult {
   status: number
   message: string
   path?: string
+  data?: any
 }
 
 export class FileTool {

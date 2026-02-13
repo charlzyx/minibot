@@ -1,22 +1,24 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { getConfigManager, closeConfigManager } from './config/manager'
-import { Agent } from './agent'
+import { serve } from '@hono/node-server'
+import dotenv from 'dotenv'
 
-// Initialize managers
+dotenv.config()
+
+import { getConfigManager, closeConfigManager, Config } from './config/manager'
+import { Agent } from './agent'
+import { startFeishuWS, stopFeishuWS, getFeishuChannel, FeishuMessage } from './channels/feishu'
+
 const configManager = getConfigManager()
 
-const app = new Hono({
-  middleware: [
-    cors({
-      origin: '*',
-      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization'],
-    }),
-  ],
-})
+const app = new Hono()
 
-// Health check endpoint
+app.use('*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+}))
+
 app.get('/health', (c) => {
   return c.json({
     status: 'ok',
@@ -25,7 +27,6 @@ app.get('/health', (c) => {
   })
 })
 
-// Config API
 app.get('/api/config', async (c) => {
   const config = await configManager.loadConfig()
   return c.json(config)
@@ -37,10 +38,9 @@ app.post('/api/config', async (c) => {
   return c.json({ success: true })
 })
 
-// Chat API
 app.post('/api/chat', async (c) => {
   const body = await c.req.json()
-  const { message, userId = 'anonymous', platform = 'web', sessionId, history = [] } = body
+  const { message, userId = 'anonymous', platform = 'web', history = [] } = body
   
   const agent = new Agent()
   
@@ -49,8 +49,9 @@ app.post('/api/chat', async (c) => {
       userMessage: message,
       userId,
       platform,
-      sessionId,
-      history
+      messageId: crypto.randomUUID(),
+      history: history.map((h: any) => ({ ...h, timestamp: h.timestamp || Date.now() })),
+      metadata: {}
     })
     
     return c.json({
@@ -66,7 +67,6 @@ app.post('/api/chat', async (c) => {
   }
 })
 
-// Memory API
 app.get('/api/memory', async (c) => {
   const { query, limit, tag } = c.req.query()
   
@@ -108,20 +108,16 @@ app.delete('/api/memory/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// Tools API
 app.get('/api/tools', async (c) => {
   const { getTools } = await import('./tools/index')
   const tools = getTools()
   
-  return c.json(Object.keys(tools).map(key => ({
-    name: key,
-    ...tools[key]
-  })))
+  return c.json(Object.values(tools))
 })
 
 app.post('/api/tools/:name', async (c) => {
   const { name } = c.req.param()
-  const { body } = await c.req.json()
+  const body = await c.req.json()
   
   const { getTools } = await import('./tools/index')
   const tools = getTools()
@@ -146,12 +142,10 @@ app.post('/api/tools/:name', async (c) => {
   }
 })
 
-// SSE Chat endpoint for streaming responses
 app.get('/api/chat/stream', async (c) => {
   const { message } = c.req.query()
   const { userId = 'anonymous', platform = 'web' } = c.req.query()
   
-  // Return a stream if configured
   const headers = new Headers({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -167,8 +161,9 @@ app.get('/api/chat/stream', async (c) => {
           userMessage: message,
           userId,
           platform,
-          sessionId: c.req.header('x-session-id') || crypto.randomUUID(),
-          history: []
+          messageId: crypto.randomUUID(),
+          history: [],
+          metadata: {}
         })
         
         const encoder = new TextEncoder()
@@ -186,42 +181,10 @@ app.get('/api/chat/stream', async (c) => {
   return new Response(stream, { headers })
 })
 
-// Feishu webhook endpoint (if configured)
-app.post('/webhooks/feishu', async (c) => {
-  const { getMemoryManager } = await import('./memory/manager')
-  const memoryManager = getMemoryManager()
-  const body = await c.req.json()
-  
-  // Store message
-  await memoryManager.store(JSON.stringify(body), ['webhook', 'feishu', body.event?.message_id || Date.now().toString()])
-  
-  return c.json({ success: true })
-})
-
-// WeChat webhook endpoint (if configured)
-app.post('/webhooks/wechat', async (c) => {
-  const body = await c.req.json()
-  
-  // Store message
-  const { getMemoryManager } = await import('./memory/manager')
-  const memoryManager = getMemoryManager()
-  await memoryManager.store(JSON.stringify(body), ['webhook', 'wechat', body.msgid || Date.now().toString()])
-  
-  return c.json({ success: true })
-})
-
-// WeChat Push webhook
-app.get('/webhooks/wechat', (c) => {
-  // WeChat server verification endpoint
-  return c.text('success')
-})
-
-// 404 handler
 app.notFound((c) => {
   return c.json({ error: 'Not Found' }, 404)
 })
 
-// Error handler
 app.onError((err, c) => {
   console.error('Server error:', err)
   
@@ -231,22 +194,114 @@ app.onError((err, c) => {
   }, 500)
 })
 
-// Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\nShutting down gracefully...')
+  stopFeishuWS()
   configManager?.close()
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
   console.log('\nShutting down gracefully...')
+  stopFeishuWS()
   configManager?.close()
   process.exit(0)
 })
 
-// Start server
+async function initializeFeishuWS() {
+  try {
+    const config = await configManager.loadConfig()
+    console.log('[Debug] Loaded config:', JSON.stringify(config, null, 2))
+    const feishuConfig = config.channels.feishu
+    
+    if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
+      console.log('[Feishu] Starting WebSocket connection...')
+      
+      startFeishuWS({
+        appId: feishuConfig.appId,
+        appSecret: feishuConfig.appSecret,
+        encryptKey: feishuConfig.encryptKey,
+        verificationToken: feishuConfig.verificationToken,
+        allowFrom: feishuConfig.allowFrom
+      }, async (message: FeishuMessage) => {
+        const userId = message.sender_id?.open_id || ''
+        const content = message.content
+        const messageId = message.message_id
+        const chatId = message.chat_id
+        
+        console.log('========================================')
+        console.log('[Feishu] 📥 Received Message:')
+        console.log(`  User ID: ${userId}`)
+        console.log(`  Chat ID: ${chatId}`)
+        console.log(`  Message: ${content}`)
+        console.log(`  Message ID: ${messageId}`)
+        console.log(`  Time: ${new Date().toISOString()}`)
+        console.log('========================================')
+        
+        const { getMemoryManager } = await import('./memory/manager')
+        const memoryManager = getMemoryManager()
+        
+        await memoryManager.store(
+          JSON.stringify({ userId, content, messageId }),
+          ['feishu', 'message', messageId]
+        )
+        
+        if (userId && content) {
+          try {
+            const feishuChannel = getFeishuChannel({
+              appId: feishuConfig.appId,
+              appSecret: feishuConfig.appSecret,
+              encryptKey: feishuConfig.encryptKey,
+              verificationToken: feishuConfig.verificationToken,
+              allowFrom: feishuConfig.allowFrom
+            })
+            
+            console.log('[Feishu] 🤖 Processing with Agent...')
+            const agent = new Agent()
+            const response = await agent.process({
+              userMessage: content,
+              userId,
+              platform: 'feishu',
+              messageId,
+              history: [],
+              metadata: {}
+            })
+            
+            console.log('[Feishu] 📤 Sending reply...')
+            await feishuChannel.sendCardMessage(response, userId)
+            console.log('[Feishu] ✅ Reply sent successfully!')
+          } catch (error) {
+            console.error('[Feishu] ❌ Failed to reply:', error)
+          }
+        }
+      })
+      
+      console.log('[Feishu] WebSocket initialization completed')
+    } else {
+      console.log('[Feishu] Not enabled or missing credentials:', {
+        enabled: feishuConfig.enabled,
+        appId: feishuConfig.appId,
+        appSecret: feishuConfig.appSecret
+      })
+    }
+  } catch (error) {
+    console.error('[Feishu] Failed to initialize WebSocket:', error)
+  }
+}
+
 const port = process.env.PORT || 18790
 console.log(`🚀 Minibot server starting on port ${port}`)
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  serve({ 
+    fetch: app.fetch, 
+    port: Number(port) 
+  })
+  
+  setTimeout(() => {
+    initializeFeishuWS()
+  }, 1000)
+}
 
 export default {
   port,

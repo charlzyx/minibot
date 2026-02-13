@@ -120,14 +120,14 @@ export class Agent {
   }
 
   private async planTasks(intent: Intent, context: Record<string, any>): Promise<any[]> {
-    const tasks: []
+    const tasks: any[] = []
     
     switch (intent.type) {
       case 'search':
         tasks.push({
           tool: 'web',
           params: {
-            url: `https://www.google.com/search?q=${encodeURIComponent(intent.params.query)}`
+            url: `https://www.google.com/search?q=${encodeURIComponent(intent.params?.query || '')}`
           }
         })
         break
@@ -138,7 +138,7 @@ export class Agent {
           params: {
             path: 'memory.txt',
             action: 'append',
-            content: intent.params.content
+            content: intent.params?.content || ''
           }
         })
         break
@@ -148,7 +148,7 @@ export class Agent {
           tool: 'cron',
           params: {
             name: 'reminder',
-            message: intent.params.message
+            message: intent.params?.message || ''
           }
         })
         break
@@ -159,14 +159,28 @@ export class Agent {
         const config = await this.configManager.loadConfig()
         
         // Build prompt
-        const prompt = this.buildPrompt(context, config)
+        const prompt = this.buildPrompt({
+          userMessage: context.userMessage || '',
+          userId: context.userId || '',
+          platform: context.platform || '',
+          messageId: context.messageId || crypto.randomUUID(),
+          history: context.history || [],
+          metadata: context.metadata || {}
+        }, config)
         
         tasks.push({
           tool: 'llm',
           params: {
             provider: config.provider.name,
             model: config.model.name,
-            messages: this.buildLLMMessages(context, prompt)
+            messages: this.buildLLMMessages({
+              userMessage: context.userMessage || '',
+              userId: context.userId || '',
+              platform: context.platform || '',
+              messageId: context.messageId || crypto.randomUUID(),
+              history: context.history || [],
+              metadata: context.metadata || {}
+            }, prompt)
           }
         })
         break
@@ -250,7 +264,7 @@ export class Agent {
     }
     
     const searchResult = results[0].result
-    return `找到 ${searchResult.count} 条结果：\n${searchResult.items.slice(0, 5).map(item => item.title).join('\n')}`
+    return `找到 ${searchResult.count} 条结果：\n${searchResult.items?.slice(0, 5).map((item: any) => item.title).join('\n') || ''}`
   }
 
   private formatLLMResponse(result: any): string {
@@ -262,7 +276,7 @@ export class Agent {
   }
 
   private buildPrompt(context: AgentContext, config: Config): string {
-    const recentMemories = context.recentMemories.map(m => m.content).join('\n')
+    const recentMemories = ''
     
     return `你是一个 AI 助手，帮助用户解决问题。
     
@@ -309,7 +323,7 @@ ${recentMemories}
       // Store conversation turn
       await this.memoryManager.store(context.userMessage, ['chat', context.userId, context.platform])
       await this.memoryManager.store(response, ['assistant', context.userId, context.platform])
-    } else if (intent.type === 'memory') {
+    } else if (intent.type === 'memory' && intent.params?.content) {
       // Store explicit memory
       await this.memoryManager.store(intent.params.content, ['explicit', context.userId])
     }

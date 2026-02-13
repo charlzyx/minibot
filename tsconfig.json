@@ -4,8 +4,6 @@
     "module": "ESNext",
     "moduleResolution": "node",
     "lib": ["ES2020"],
-    "jsx": "react",
-    "jsxImportSource": "@emotion/react",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

@@ -1,10 +1,17 @@
 import { z } from 'zod'
-import Database from 'better-sqlite3'
-import { open } from 'better-sqlite3'
+import sqlite3 from 'better-sqlite3'
 import path from 'path'
-import { ConfigSchema, Config } from './schema'
+import fs from 'fs'
+import { ConfigSchema } from './schema'
+import type { Config } from './schema'
+import dotenv from 'dotenv'
+
+dotenv.config()
+
+export type { Config }
 
 const DB_PATH = path.join(process.cwd(), 'db', 'memory.db')
+const DB_DIR = path.dirname(DB_PATH)
 
 interface ConfigRow {
   id: number
@@ -14,10 +21,13 @@ interface ConfigRow {
 }
 
 export class ConfigManager {
-  private db: Database
+  private db: sqlite3.Database
 
   constructor() {
-    this.db = new Database(DB_PATH)
+    if (!fs.existsSync(DB_DIR)) {
+      fs.mkdirSync(DB_DIR, { recursive: true })
+    }
+    this.db = new sqlite3(DB_PATH)
     this.initialize()
   }
 
@@ -46,7 +56,75 @@ export class ConfigManager {
       }
     }
     
-    // Merge with defaults
+    if (Object.keys(config).length === 0) {
+      return {
+        provider: {
+          name: 'zhipu',
+          apiKey: process.env.ZHIPU_API_KEY || '',
+          apiBase: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/coding/paas/v4'
+        },
+        model: {
+          name: 'glm-4.7',
+          maxTokens: 4000,
+          temperature: 0.7
+        },
+        channels: {
+          feishu: {
+            enabled: !!process.env.FEISHU_APP_ID && !!process.env.FEISHU_APP_SECRET,
+            appId: process.env.FEISHU_APP_ID || '',
+            appSecret: process.env.FEISHU_APP_SECRET || '',
+            encryptKey: '',
+            verificationToken: '',
+            allowFrom: []
+          },
+          wechat: {
+            enabled: false,
+            appId: '',
+            appSecret: ''
+          },
+          dingtalk: {
+            enabled: false,
+            clientId: '',
+            clientSecret: '',
+            allowFrom: []
+          },
+          qq: {
+            enabled: false,
+            appId: '',
+            secret: '',
+            allowFrom: []
+          },
+          discord: {
+            enabled: false,
+            botToken: '',
+            appToken: '',
+            groupPolicy: 'mention'
+          },
+          slack: {
+            enabled: false,
+            botToken: '',
+            appToken: '',
+            groupPolicy: 'mention'
+          }
+        },
+        tools: {
+          shell: {
+            enabled: true
+          },
+          web: {
+            enabled: true
+          },
+          file: {
+            enabled: true,
+            workspace: '.'
+          }
+        },
+        security: {
+          restrictToWorkspace: false
+        }
+      }
+    }
+    
     return ConfigSchema.parse(config)
   }
 
@@ -63,8 +141,7 @@ export class ConfigManager {
         `INSERT INTO config (key, value, updatedAt) VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value = ?, updatedAt = ?`
       )
-      stmt.run(jsonString, now)
-      stmt.finalize()
+      stmt.run(key, jsonString, now, jsonString, now)
     }
     
     for (const [key, value] of Object.entries(validatedConfig)) {

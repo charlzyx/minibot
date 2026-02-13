@@ -1,5 +1,4 @@
-import Database from 'better-sqlite3'
-import { open } from 'better-sqlite3'
+import sqlite3 from 'better-sqlite3'
 import path from 'path'
 
 const DB_PATH = path.join(process.cwd(), 'db', 'memory.db')
@@ -7,7 +6,7 @@ const DB_PATH = path.join(process.cwd(), 'db', 'memory.db')
 interface MemoryRow {
   id: number
   content: string
-  embedding?: string
+  embedding?: Buffer
   tags: string
   createdAt: number
   updatedAt: number
@@ -23,10 +22,10 @@ export interface Memory {
 }
 
 export class MemoryManager {
-  private db: Database
+  private db: sqlite3.Database
 
   constructor() {
-    this.db = new Database(DB_PATH)
+    this.db = new sqlite3(DB_PATH)
     this.initialize()
   }
 
@@ -50,11 +49,10 @@ export class MemoryManager {
     const tagsJson = JSON.stringify(tags)
     const embeddingBlob = embedding && embedding.length > 0 ? new Uint8Array(new Float64Array(embedding).buffer) : null
     
-    const result = this.db.prepare(
+    const stmt = this.db.prepare(
       'INSERT INTO memory (content, embedding, tags, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)'
     )
-    result.run(content, embeddingBlob, tagsJson, now, now)
-    result.finalize()
+    const result = stmt.run(content, embeddingBlob, tagsJson, now, now)
     
     return result.lastInsertRowid as number
   }
@@ -76,9 +74,9 @@ export class MemoryManager {
 
   // Search memories by content (contains)
   async search(query: string, limit: number = 10): Promise<Memory[]> {
-    const rows = this.db.prepare('SELECT * FROM memory WHERE content LIKE ? ORDER BY updatedAt DESC LIMIT ?').all(`%${query}%`, limit)
+    const rows = this.db.prepare('SELECT * FROM memory WHERE content LIKE ? ORDER BY updatedAt DESC LIMIT ?').all(`%${query}%`, limit) as MemoryRow[]
     
-    return rows.map(row => ({
+    return rows.map((row: MemoryRow) => ({
       id: row.id,
       content: row.content,
       embedding: row.embedding ? this.deserializeEmbedding(row.embedding) : undefined,
@@ -90,9 +88,9 @@ export class MemoryManager {
 
   // Get memories by tag
   async getByTag(tag: string, limit: number = 10): Promise<Memory[]> {
-    const rows = this.db.prepare('SELECT * FROM memory WHERE tags LIKE ? ORDER BY updatedAt DESC LIMIT ?').all(`%${tag}%`, limit)
+    const rows = this.db.prepare('SELECT * FROM memory WHERE tags LIKE ? ORDER BY updatedAt DESC LIMIT ?').all(`%${tag}%`, limit) as MemoryRow[]
     
-    return rows.map(row => ({
+    return rows.map((row: MemoryRow) => ({
       id: row.id,
       content: row.content,
       embedding: row.embedding ? this.deserializeEmbedding(row.embedding) : undefined,
@@ -104,9 +102,9 @@ export class MemoryManager {
 
   // Get recent memories
   async getRecent(limit: number = 10): Promise<Memory[]> {
-    const rows = this.db.prepare('SELECT * FROM memory ORDER BY updatedAt DESC LIMIT ?').all(limit)
+    const rows = this.db.prepare('SELECT * FROM memory ORDER BY updatedAt DESC LIMIT ?').all(limit) as MemoryRow[]
     
-    return rows.map(row => ({
+    return rows.map((row: MemoryRow) => ({
       id: row.id,
       content: row.content,
       embedding: row.embedding ? this.deserializeEmbedding(row.embedding) : undefined,

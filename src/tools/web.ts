@@ -1,4 +1,4 @@
-interface WebResult {
+export interface WebResult {
   status: number
   statusText: string
   headers: Record<string, string>

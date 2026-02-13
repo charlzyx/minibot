@@ -1,15 +1,4 @@
-import type { Context } from 'hono'
-
-export interface FeishuMessage {
-  message_id: string
-  msg_type: string
-  content: {
-    text: string
-  } | {
-    post_at: number
-  }
-  }
-}
+import * as lark from '@larksuiteoapi/node-sdk'
 
 export interface FeishuConfig {
   appId: string
@@ -19,106 +8,243 @@ export interface FeishuConfig {
   allowFrom?: string[]
 }
 
+export interface FeishuMessage {
+  message_id: string
+  msg_type: string
+  chat_id: string
+  content: string
+  sender_id?: {
+    open_id?: string
+    user_id?: string
+  }
+}
+
+type MessageHandler = (message: FeishuMessage) => Promise<void>
+
+let wsClient: lark.WSClient | null = null
+let messageHandler: MessageHandler | null = null
+const processedMessageIds = new Map<string, boolean>()
+
 export class FeishuChannel {
+  private client: lark.Client
   private config: FeishuConfig
-  private apiUrl: string
 
   constructor(config: FeishuConfig) {
     this.config = config
-    this.apiUrl = config.appId.startsWith('cli_')
-      ? `https://open.feishu.cn/open-apis/bot/v2/app/${config.appId}`
-      : `https://open.feishu.cn/open-apis/bot/v2/app/${config.appId}`
+    this.client = new lark.Client({
+      appId: config.appId,
+      appSecret: config.appSecret,
+    })
   }
 
-  /**
-   * Send message via Feishu API
-   */
-  async sendMessage(content: string): Promise<{ message_id: string; data: FeishuMessage['content'] }> {
-    const url = `${this.apiUrl}/im/message/send`
-    
-    const body = {
-      msg_type: 'text',
-      content: {
-        text: content
+  async sendMessage(content: string, receiveId: string): Promise<{ message_id: string; data: any }> {
+    const result = await this.client.im.message.create({
+      params: {
+        receive_id_type: 'open_id'
       },
-      receive_id: crypto.randomUUID(),
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.appSecret}`,
-      'X-3-App-Extra-Info': JSON.stringify({
-        process_id: crypto.randomUUID(),
-        trace_id: crypto.randomUUID(),
-      }),
-      },
-      body: JSON.stringify(body),
+      data: {
+        receive_id: receiveId,
+        content: JSON.stringify({
+          text: content
+        }),
+        msg_type: 'text'
+      }
     })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`Feishu API error: ${response.status} - ${errorText}`)
-    }
-
-    const result = await response.json() as {
-      message_id: string
-      code: number
-      data: FeishuMessage['content']
-    }
 
     if (result.code !== 0) {
-      throw new Error(`Feishu API error: ${result.code} - ${result.message || 'Unknown error'}`)
+      throw new Error(`Feishu API error: ${result.code} - ${result.msg}`)
     }
 
-    return result.data
+    if (!result.data || !result.data.message_id) {
+      throw new Error('Feishu API error: no message_id returned')
+    }
+
+    return {
+      message_id: result.data.message_id,
+      data: {}
+    }
   }
 
-  /**
-   * Create message with card
-   */
-  async sendCardMessage(title: string, content: string): Promise<{ message_id: string; data: FeishuMessage['content'] }> {
-    const url = `${this.apiUrl}/im/message/send`
-    
-    const body = {
-      msg_type: 'interactive',
-      content: {
-        card: {
-          elements: [
-            {
-              tag: 'text',
-              text: content,
-            },
-            {
-              tag: 'title',
-              text: title,
-            },
-          ],
-        },
-      },
-      receive_id: crypto.randomUUID(),
+  async sendCardMessage(content: string, receiveId: string): Promise<{ message_id: string; data: any }> {
+    const card = {
+      config: { wide_screen_mode: true },
+      elements: [
+        {
+          tag: 'markdown',
+          content: content
+        }
+      ]
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.appSecret}`,
-        'X-3-App-Extra-Info': JSON.stringify({
-          process_id: crypto.randomUUID(),
-          trace_id: crypto.randomUUID(),
-        }),
+    const result = await this.client.im.message.create({
+      params: {
+        receive_id_type: 'open_id'
       },
-      body: JSON.stringify(body),
+      data: {
+        receive_id: receiveId,
+        content: JSON.stringify(card),
+        msg_type: 'interactive'
+      }
     })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`Feishu API error: ${response.status} - ${errorText}`)
+    if (result.code !== 0) {
+      throw new Error(`Feishu API error: ${result.code} - ${result.msg}`)
     }
 
-    const result = await response.json()
-    return result.data
+    if (!result.data || !result.data.message_id) {
+      throw new Error('Feishu API error: no message_id returned')
+    }
+
+    return {
+      message_id: result.data.message_id,
+      data: {}
+    }
   }
+
+  async addReaction(messageId: string, emojiType: string = 'THUMBSUP'): Promise<void> {
+    try {
+      // Correct API path for message reactions (using path parameter)
+      const result = await this.client.im.messageReaction.create({
+        path: {
+          message_id: messageId
+        },
+        data: {
+          reaction_type: {
+            emoji_type: emojiType
+          }
+        }
+      } as any)
+
+      if (result.code !== 0) {
+        console.log(`[Feishu] Failed to add reaction: ${result.msg}`)
+      } else {
+        console.log(`[Feishu] ✅ Added reaction ${emojiType} successfully`)
+      }
+    } catch (e) {
+      console.log(`[Feishu] Error adding reaction:`, e)
+    }
+  }
+
+  getConfig(): FeishuConfig {
+    return this.config
+  }
+}
+
+function isMessageProcessed(messageId: string): boolean {
+  if (processedMessageIds.has(messageId)) {
+    return true
+  }
+  
+  processedMessageIds.set(messageId, true)
+  
+  if (processedMessageIds.size > 1000) {
+    const keys = Array.from(processedMessageIds.keys())
+    const toDelete = keys.slice(0, 500)
+    toDelete.forEach(k => processedMessageIds.delete(k))
+  }
+  
+  return false
+}
+
+export function startFeishuWS(
+  config: FeishuConfig,
+  onMessage: MessageHandler
+): void {
+  if (wsClient) {
+    console.log('[Feishu] WebSocket already connected')
+    return
+  }
+
+  messageHandler = onMessage
+
+  const feishuChannel = new FeishuChannel(config)
+
+  const eventDispatcher = new lark.EventDispatcher({})
+
+  eventDispatcher.register({
+    'im.message.receive_v1': async (data: any) => {
+      console.log('[Feishu] ✅ Event matched: im.message.receive_v1')
+
+      const message = data.message
+      if (!message) {
+        console.log('[Feishu] No message in event data')
+        return
+      }
+
+      const messageId = message.message_id
+      
+      if (isMessageProcessed(messageId)) {
+        console.log(`[Feishu] Duplicate message ignored: ${messageId}`)
+        return
+      }
+
+      const chatId = message.chat_id
+      const content = message.content
+      const msgType = message.message_type
+      const chatType = message.chat_type
+
+      let userOpenId = ''
+      if (data.sender && data.sender.sender_id) {
+        userOpenId = data.sender.sender_id.open_id || ''
+      }
+
+      const senderType = data.sender?.sender_type || ''
+      if (senderType === 'bot') {
+        console.log('[Feishu] Ignoring bot message')
+        return
+      }
+
+      await feishuChannel.addReaction(messageId, 'THUMBSUP')
+      console.log('[Feishu] Added THUMBSUP reaction')
+
+      if (msgType === 'text' && content && userOpenId) {
+        try {
+          const textContent = JSON.parse(content).text
+          console.log('[Feishu] Message:', { userOpenId, textContent, messageId, chatType })
+
+          if (messageHandler) {
+            const replyTo = chatType === 'group' ? chatId : userOpenId
+            
+            await messageHandler({
+              message_id: messageId,
+              msg_type: msgType,
+              chat_id: chatId,
+              content: textContent,
+              sender_id: {
+                open_id: userOpenId
+              }
+            })
+          }
+        } catch (e) {
+          console.error('[Feishu] Failed to parse message content:', e)
+        }
+      } else {
+        console.log(`[Feishu] Unsupported message type: ${msgType}`)
+      }
+    }
+  })
+
+  wsClient = new lark.WSClient({
+    appId: config.appId,
+    appSecret: config.appSecret,
+    loggerLevel: lark.LoggerLevel.debug,
+  })
+
+  wsClient.start({
+    eventDispatcher
+  })
+
+  console.log('[Feishu] WebSocket client started, connecting to Feishu server...')
+}
+
+export function stopFeishuWS(): void {
+  if (wsClient) {
+    wsClient.close()
+    wsClient = null
+    console.log('[Feishu] WebSocket client stopped')
+  }
+}
+
+export function getFeishuChannel(config: FeishuConfig): FeishuChannel {
+  return new FeishuChannel(config)
 }

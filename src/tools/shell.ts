@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 
-interface ShellResult {
+export interface ShellResult {
   stdout: string
   stderr: string
   code: number | null
