@@ -1,71 +1,72 @@
-# Session Module Design
+# Session 模块设计说明
 
-## Overview
+## 概述
 
-The Session module provides conversation history management with isolation and persistence capabilities. It follows the design principles from nanobot, using JSONL files for storage with in-memory caching for performance.
+Session 模块提供会话历史管理功能，支持会话隔离和持久化存储。它遵循 nanobot 的设计原则，使用 JSONL 文件存储会话数据，并通过内存缓存提高性能。
 
-## Architecture
+## 架构设计
 
 ```
 ┌────────────────────────────────────────────────┐
 │              Session Manager                  │
-│         (Singleton Pattern)                  │
+│         (单例模式)                             │
 └────────────────────────────────────────────────┘
                       │
           ┌───────────┴───────────┐
           │                       │
           ▼                       ▼
     ┌─────────┐           ┌─────────┐
-    │  Cache  │           │ Storage │
+    │  缓存   │           │  存储   │
     │ (Map)   │           │ (JSONL) │
     └─────────┘           └─────────┘
 ```
 
-## Core Components
+## 核心组件
 
 ### 1. SessionManager
 
-The main class that manages all sessions.
+会话管理器的主类，负责管理所有会话。
 
-**Responsibilities**:
-- Session creation and retrieval
-- Message history management
-- Session persistence
-- Cache management
-- Session cleanup
+**职责**：
+- 会话创建和获取
+- 消息历史管理
+- 会话持久化
+- 缓存管理
+- 会话清理
 
-**Key Methods**:
-- `getOrCreate(key: string): Session` - Get or create session by key
-- `addMessage(key: string, role: string, content: string)` - Add message to session
-- `getMessages(key: string, maxMessages?: number): ChatMessage[]` - Get message history
-- `save(session: Session)` - Save session to disk
-- `clear(key: string)` - Clear session messages
-- `unload(key: string)` - Unload session from cache
-- `getAllSessions(): Session[]` - Get all cached sessions
-- `delete(key: string)` - Delete session
-- `listSessions()` - List all sessions
-- `cleanup(maxAge: number)` - Cleanup expired sessions
+**核心方法**：
+- `getOrCreate(key: string): Session` - 根据 key 获取或创建会话
+- `addMessage(key: string, role: string, content: string)` - 向会话添加消息
+- `getMessages(key: string, maxMessages?: number): ChatMessage[]` - 获取消息历史
+- `save(session: Session)` - 将会话保存到磁盘
+- `clear(key: string)` - 清空会话消息
+- `unload(key: string)` - 从缓存中卸载会话
+- `getAllSessions(): Session[]` - 获取所有缓存的会话
+- `delete(key: string)` - 删除会话
+- `listSessions()` - 列出所有会话
+- `cleanup(maxAge: number)` - 清理过期会话
 
 ### 2. Session
 
-Represents a single conversation session.
+表示单个对话会话。
 
-**Properties**:
+**属性**：
 ```typescript
 interface Session {
-  key: string              // Unique session identifier
-  messages: SessionMessage[]  // Message history
-  metadata: SessionMetadata   // Session metadata
-  created_at: number          // Creation timestamp
-  updated_at: number          // Last update timestamp
+  key: string              // 唯一会话标识符
+  messages: SessionMessage[]  // 消息历史
+  created_at: number          // 创建时间戳
+  updated_at: number          // 最后更新时间戳
+  metadata: Record<string, any> // 会话元数据
+  activeSkill?: string       // 活跃技能
 }
 ```
 
 ### 3. SessionMessage
 
-Represents a single message in a session.
+表示会话中的单条消息。
 
-**Properties**:
+**属性**：
 ```typescript
 interface SessionMessage {
   role: 'user' | 'assistant' | 'system'
@@ -76,9 +77,9 @@ interface SessionMessage {
 
 ### 4. ChatMessage
 
-Filtered message type for LLM context (excludes system messages).
+用于 LLM 上下文的过滤消息类型（排除系统消息）。
 
-**Properties**:
+**属性**：
 ```typescript
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -87,139 +88,139 @@ interface ChatMessage {
 }
 ```
 
-## Session Key Format
+## 会话键格式
 
-Sessions are identified by keys that include platform and chat information:
+会话通过包含平台和聊天信息的键进行标识：
 
-### Private Chat
+### 私聊
 ```
 {platform}:{userId}
 ```
-Example: `feishu:oc_xxxxxxxxxxxxx`
+示例：`feishu:oc_xxxxxxxxxxxxx`
 
-### Group Chat
+### 群聊
 ```
 {platform}:{chatId}
 ```
-Example: `feishu:oc_xxxxxxxxxxxxx`
+示例：`feishu:oc_xxxxxxxxxxxxx`
 
-This ensures:
-- Each conversation has its own context
-- Group chats are isolated from private chats
-- Multiple platforms can coexist
+这样确保：
+- 每个对话都有自己的上下文
+- 群聊与会话隔离
+- 多个平台可以共存
 
-## Storage Format
+## 存储格式
 
-### JSONL Structure
+### JSONL 结构
 
-Each session is stored as a JSONL file:
+每个会话存储为一个 JSONL 文件：
 ```
 sessions/{key}.jsonl
 ```
 
-Each line contains:
+每行包含：
 ```json
 {"type":"metadata","data":{"created_at":1234567890,"updated_at":1234567890}}
 {"type":"message","data":{"role":"user","content":"Hello","timestamp":1234567890}}
 {"type":"message","data":{"role":"assistant","content":"Hi there!","timestamp":1234567891}}
 ```
 
-### Advantages of JSONL
+### JSONL 的优势
 
-- **Append-only**: Easy to add new messages
-- **Line-based**: Simple to parse and read
-- **Human-readable**: Easy to inspect manually
-- **Efficient**: Only read what you need
+- **追加写入**：易于添加新消息
+- **基于行**：解析和读取简单
+- **人类可读**：易于手动检查
+- **高效**：只读取需要的内容
 
-## Caching Strategy
+## 缓存策略
 
-### Cache Implementation
+### 缓存实现
 
 ```typescript
 private cache: Map<string, Session>
 ```
 
-### Cache Behavior
+### 缓存行为
 
-1. **First Access**: Load from disk and cache
-2. **Subsequent Access**: Return from cache
-3. **Updates**: Update cache and mark for save
-4. **Persistence**: Save on explicit `save()` call
+1. **首次访问**：从磁盘加载并缓存
+2. **后续访问**：从缓存返回
+3. **更新**：更新缓存并标记为待保存
+4. **持久化**：在显式调用 `save()` 时保存
 
-### Cache Benefits
+### 缓存优势
 
-- **Performance**: Avoid disk I/O for frequent access
-- **Consistency**: Single source of truth in memory
-- **Simplicity**: No complex cache invalidation
+- **性能**：避免频繁访问磁盘
+- **一致性**：内存中单一数据源
+- **简单性**：无需复杂的缓存失效机制
 
-## Message History Management
+## 消息历史管理
 
-### Message Retrieval
+### 消息获取
 
 ```typescript
 getMessages(key: string, maxMessages: number = 20): ChatMessage[]
 ```
 
-- Retrieves last N messages
-- Filters out system messages
-- Returns in chronological order
+- 获取最后 N 条消息
+- 过滤系统消息
+- 按时间顺序返回
 
-### Message Addition
+### 消息添加
 
 ```typescript
 addMessage(key: string, role: string, content: string): void
 ```
 
-- Appends message to session
-- Updates timestamp
-- Marks session as modified
+- 向会话追加消息
+- 更新时间戳
+- 标记会话为已修改
 
-## Session Lifecycle
+## 会话生命周期
 
-### Creation
+### 创建
 
 ```typescript
 const session = sessionManager.getOrCreate('feishu:oc_xxx')
 ```
 
-- Check cache first
-- Load from disk if not cached
-- Create new if doesn't exist
+- 首先检查缓存
+- 如果未缓存，从磁盘加载
+- 如果不存在，创建新会话
 
-### Usage
+### 使用
 
 ```typescript
 sessionManager.addMessage('feishu:oc_xxx', 'user', 'Hello')
 const history = sessionManager.getMessages('feishu:oc_xxx', 20)
 ```
 
-- Add messages during conversation
-- Retrieve history for context
+- 在对话过程中添加消息
+- 检索历史记录作为上下文
 
-### Persistence
+### 持久化
 
 ```typescript
 await sessionManager.save(session)
 ```
 
-- Write to JSONL file
-- Update metadata timestamps
+- 写入 JSONL 文件
+- 更新元数据时间戳
 
-### Cleanup
+### 清理
 
 ```typescript
 await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000)
 ```
 
-- Remove sessions older than maxAge
-- Free up disk space
-- Clear cache entries
+- 删除超过 maxAge 的会话
+- 释放磁盘空间
+- 清理缓存条目
 
-## Integration with Agent
+## 与 Agent 集成
 
-### Session Context
+### 会话上下文
 
-The Agent uses session history to provide context:
+Agent 使用会话历史提供上下文：
 
 ```typescript
 const sessionId = chatType === 'group' ? `feishu:${chatId}` : `feishu:${userId}`
@@ -236,9 +237,9 @@ const response = await agent.process({
 })
 ```
 
-### Message Saving
+### 消息保存
 
-After processing, save messages to session:
+处理完成后，保存消息到会话：
 
 ```typescript
 sessionManager.addMessage(sessionId, 'user', context.userMessage)
@@ -246,119 +247,119 @@ sessionManager.addMessage(sessionId, 'assistant', finalContent)
 await sessionManager.save(sessionManager.getOrCreate(sessionId))
 ```
 
-## Performance Considerations
+## 性能考虑
 
-### Optimization Strategies
+### 优化策略
 
-1. **In-Memory Cache**: Fast access for active sessions
-2. **Lazy Loading**: Load sessions on demand
-3. **Message Limiting**: Limit history size (default 20)
-4. **Async Persistence**: Non-blocking saves
-5. **Periodic Cleanup**: Remove old sessions
+1. **内存缓存**：活动会话快速访问
+2. **懒加载**：按需加载会话
+3. **消息限制**：限制历史大小（默认 20）
+4. **异步持久化**：非阻塞保存
+5. **定期清理**：移除旧会话
 
-### Memory Usage
+### 内存使用
 
-- **Cache Size**: Proportional to active sessions
-- **Message Limit**: Configurable (default 20)
-- **Cleanup**: Automatic based on age
+- **缓存大小**：与活动会话数量成正比
+- **消息限制**：可配置（默认 20）
+- **清理**：基于年龄自动清理
 
-## Security Considerations
+## 安全考虑
 
-### Session Isolation
+### 会话隔离
 
-- Each session is isolated by key
-- No cross-session data access
-- Platform-based separation
+- 每个会话通过键隔离
+- 无跨会话数据访问
+- 基于平台分离
 
-### Data Privacy
+### 数据隐私
 
-- Messages stored locally
-- No external transmission
-- User-controlled cleanup
+- 消息本地存储
+- 无外部传输
+- 用户控制清理
 
-## Comparison with nanobot
+## 与 nanobot 对比
 
-| Feature | nanobot | minibot |
+| 特性 | nanobot | minibot |
 |---------|----------|----------|
-| Storage | JSONL files | JSONL files + Cache |
-| Session Key | Custom | Platform:ChatId |
-| Message Limit | Configurable | Configurable (20) |
-| Cleanup | Manual | Automatic |
-| Type Safety | Dynamic | Static (TS) |
+| 存储 | JSONL 文件 | JSONL 文件 + 缓存 |
+| 会话键 | 自定义 | Platform:ChatId |
+| 消息限制 | 可配置 | 可配置（20） |
+| 清理 | 手动 | 自动 |
+| 类型安全 | 动态 | 静态（TS） |
 
-## Future Enhancements
+## 未来扩展
 
-### Planned Features
+### 计划功能
 
-1. **Compression**: Compress old messages
-2. **Summarization**: Summarize long conversations
-3. **Search**: Search across sessions
-4. **Analytics**: Session statistics and insights
-5. **Export**: Export sessions to various formats
+1. **压缩**：压缩旧消息
+2. **摘要**：总结长对话
+3. **搜索**：跨会话搜索
+4. **分析**：会话统计和洞察
+5. **导出**：导出会话到各种格式
 
-### Potential Improvements
+### 潜在改进
 
-1. **Database Backend**: Optional SQLite backend
-2. **Distributed Storage**: Support for cloud storage
-3. **Encryption**: Encrypt sensitive sessions
-4. **Backup**: Automatic backup system
+1. **数据库后端**：可选 SQLite 后端
+2. **分布式存储**：支持云存储
+3. **加密**：加密敏感会话
+4. **备份**：自动备份系统
 
-## Usage Examples
+## 使用示例
 
-### Basic Usage
+### 基本用法
 
 ```typescript
 import { getSessionManager } from './session'
 
 const sessionManager = getSessionManager()
 
-// Get or create session
+// 获取或创建会话
 const session = sessionManager.getOrCreate('feishu:oc_xxx')
 
-// Add messages
+// 添加消息
 sessionManager.addMessage('feishu:oc_xxx', 'user', 'Hello')
 sessionManager.addMessage('feishu:oc_xxx', 'assistant', 'Hi!')
 
-// Get history
+// 获取历史
 const history = sessionManager.getMessages('feishu:oc_xxx', 20)
 
-// Save
+// 保存
 await sessionManager.save(session)
 ```
 
-### Advanced Usage
+### 高级用法
 
 ```typescript
-// List all sessions
+// 列出所有会话
 const sessions = await sessionManager.listSessions()
-console.log(`Total sessions: ${sessions.length}`)
+console.log(`总会话数: ${sessions.length}`)
 
-// Cleanup old sessions
+// 清理旧会话
 await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000)
 
-// Clear specific session
+// 清空特定会话
 sessionManager.clear('feishu:oc_xxx')
 
-// Delete session
+// 删除会话
 await sessionManager.delete('feishu:oc_xxx')
 ```
 
-## Testing
+## 测试
 
-### Test Scenarios
+### 测试场景
 
-1. **Session Creation**: Verify new sessions are created
-2. **Message Addition**: Test message addition and retrieval
-3. **Persistence**: Verify sessions persist across restarts
-4. **Cache**: Test cache behavior
-5. **Cleanup**: Verify old sessions are removed
+1. **会话创建**：验证新会话创建
+2. **消息添加**：测试消息添加和检索
+3. **持久化**：验证会话在重启后保持
+4. **缓存**：测试缓存行为
+5. **清理**：验证旧会话被移除
 
-### Test Commands
+### 测试命令
 
 ```bash
 npm run test:session
 ```
 
-## Conclusion
+## 结论
 
-The Session module provides a robust, efficient, and type-safe solution for conversation history management. It combines the simplicity of JSONL storage with the performance of in-memory caching, following the proven design patterns from nanobot while adding TypeScript type safety and modern architecture.
+Session 模块提供了一个健壮、高效、类型安全的会话历史管理解决方案。它结合了 JSONL 存储的简单性和内存缓存的性能优势，遵循 nanobot 经过验证的设计模式，同时添加了 TypeScript 类型安全和现代架构。

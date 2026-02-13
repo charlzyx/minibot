@@ -8,7 +8,10 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
-    "test": "vitest"
+    "test": "vitest",
+    "docs:dev": "vocs dev docs",
+    "docs:build": "vocs build docs",
+    "docs:preview": "vocs preview docs"
   },
   "keywords": [
     "bot",
@@ -40,6 +43,7 @@
     "@types/uuid": "^10.0.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "vitest": "^1.2.2",
+    "vocs": "^1.4.1"
   }
 }
