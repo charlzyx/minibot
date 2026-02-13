@@ -2,14 +2,74 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import dotenv from 'dotenv'
+import path from 'path'
+import fs from 'fs'
 
 dotenv.config()
 
-import { getConfigManager, closeConfigManager, Config } from './config/manager'
+import { getConfigManager, closeConfigManager, Config, setCustomWorkspace, getWorkspace } from './config/manager'
 import { Agent } from './agent'
 import { startFeishuWS, stopFeishuWS, getFeishuChannel, FeishuMessage } from './channels/feishu'
+import { getSessionManager, ChatMessage } from './session'
+import { getSkillManager } from './skills'
+import { getCommandManager, defaultCommands } from './commands'
+
+const args = process.argv.slice(2)
+const workspaceArg = args.find(arg => arg.startsWith('--workspace='))
+if (workspaceArg) {
+  const workspace = workspaceArg.split('=')[1]
+  setCustomWorkspace(workspace)
+  console.log(`[Config] Using custom workspace: ${workspace}`)
+}
+
+const workspace = getWorkspace()
+console.log(`[Config] Workspace: ${workspace}`)
+
+if (!fs.existsSync(workspace)) {
+  console.log(`[Config] Creating workspace directory: ${workspace}`)
+  fs.mkdirSync(workspace, { recursive: true })
+}
+
+const sessionsDir = path.join(workspace, 'sessions')
+if (!fs.existsSync(sessionsDir)) {
+  console.log(`[Config] Creating sessions directory: ${sessionsDir}`)
+  fs.mkdirSync(sessionsDir, { recursive: true })
+}
+
+const memoryDir = path.join(workspace, 'memory')
+if (!fs.existsSync(memoryDir)) {
+  console.log(`[Config] Creating memory directory: ${memoryDir}`)
+  fs.mkdirSync(memoryDir, { recursive: true })
+}
+
+const workspacesDir = path.join(workspace, 'workspaces')
+if (!fs.existsSync(workspacesDir)) {
+  console.log(`[Config] Creating workspaces directory: ${workspacesDir}`)
+  fs.mkdirSync(workspacesDir, { recursive: true })
+}
+
+const skillsDir = path.join(workspace, 'skills')
+if (!fs.existsSync(skillsDir)) {
+  console.log(`[Config] Creating skills directory: ${skillsDir}`)
+  fs.mkdirSync(skillsDir, { recursive: true })
+}
+
+const dbDir = path.join(workspace, 'db')
+if (!fs.existsSync(dbDir)) {
+  console.log(`[Config] Creating db directory: ${dbDir}`)
+  fs.mkdirSync(dbDir, { recursive: true })
+}
 
 const configManager = getConfigManager()
+
+const skillManager = getSkillManager()
+console.log('[SkillManager] Loading skills...')
+await skillManager.loadAllSkills()
+console.log(`[SkillManager] Loaded ${skillManager.getAllSkills().length} skills`)
+
+const commandManager = getCommandManager()
+commandManager.registerMany(defaultCommands)
+console.log(`[CommandManager] Registered ${defaultCommands.length} commands`)
 
 const app = new Hono()
 
@@ -142,6 +202,68 @@ app.post('/api/tools/:name', async (c) => {
   }
 })
 
+app.get('/api/skills', async (c) => {
+  const { getSkillManager } = await import('./skills')
+  const skillManager = getSkillManager()
+  
+  return c.json({
+    skills: skillManager.getAllSkills(),
+    count: skillManager.getAllSkills().length
+  })
+})
+
+app.get('/api/skills/:id', async (c) => {
+  const { id } = c.req.param()
+  const { getSkillManager } = await import('./skills')
+  const skillManager = getSkillManager()
+  
+  const skill = skillManager.getSkill(id)
+  
+  if (!skill) {
+    return c.json({ error: `Skill ${id} not found` }, 404)
+  }
+  
+  return c.json(skill)
+})
+
+app.post('/api/skills', async (c) => {
+  const body = await c.req.json()
+  const { getSkillManager } = await import('./skills')
+  const skillManager = getSkillManager()
+  
+  try {
+    const filePath = await skillManager.createSkill(
+      body.name,
+      body.content,
+      body.metadata || {}
+    )
+    
+    return c.json({
+      success: true,
+      filePath
+    })
+  } catch (error) {
+    return c.json({
+      error: error instanceof Error ? error.message : String(error),
+      success: false
+    }, 500)
+  }
+})
+
+app.delete('/api/skills/:id', async (c) => {
+  const { id } = c.req.param()
+  const { getSkillManager } = await import('./skills')
+  const skillManager = getSkillManager()
+  
+  const success = await skillManager.deleteSkill(id)
+  
+  if (!success) {
+    return c.json({ error: `Skill ${id} not found` }, 404)
+  }
+  
+  return c.json({ success: true })
+})
+
 app.get('/api/chat/stream', async (c) => {
   const { message } = c.req.query()
   const { userId = 'anonymous', platform = 'web' } = c.req.query()
@@ -228,6 +350,7 @@ async function initializeFeishuWS() {
         const content = message.content
         const messageId = message.message_id
         const chatId = message.chat_id
+        const chatType = message.msg_type
         
         console.log('========================================')
         console.log('[Feishu] 📥 Received Message:')
@@ -235,6 +358,7 @@ async function initializeFeishuWS() {
         console.log(`  Chat ID: ${chatId}`)
         console.log(`  Message: ${content}`)
         console.log(`  Message ID: ${messageId}`)
+        console.log(`  Chat Type: ${chatType}`)
         console.log(`  Time: ${new Date().toISOString()}`)
         console.log('========================================')
         
@@ -246,8 +370,12 @@ async function initializeFeishuWS() {
           ['feishu', 'message', messageId]
         )
         
+        const sessionManager = getSessionManager()
+        const sessionId = chatType === 'group' ? `feishu:${chatId}` : `feishu:${userId}`
+        
         if (userId && content) {
           try {
+            console.log('[Feishu] Getting Feishu channel...')
             const feishuChannel = getFeishuChannel({
               appId: feishuConfig.appId,
               appSecret: feishuConfig.appSecret,
@@ -258,21 +386,26 @@ async function initializeFeishuWS() {
             
             console.log('[Feishu] 🤖 Processing with Agent...')
             const agent = new Agent()
+            console.log('[Feishu] Agent created, starting process...')
             const response = await agent.process({
               userMessage: content,
               userId,
               platform: 'feishu',
               messageId,
-              history: [],
-              metadata: {}
+              sessionId,
+              history: sessionManager.getMessages(sessionId, 20),
+              metadata: { chatId, chatType }
             })
             
+            console.log('[Feishu] Agent response received:', response.substring(0, 100))
             console.log('[Feishu] 📤 Sending reply...')
-            await feishuChannel.sendCardMessage(response, userId, messageId)
+            await feishuChannel.sendCardMessage(response, userId)
             console.log('[Feishu] ✅ Reply sent successfully!')
           } catch (error) {
             console.error('[Feishu] ❌ Failed to reply:', error)
           }
+        } else {
+          console.log('[Feishu] Skipping message - userId or content missing:', { userId: !!userId, content: !!content })
         }
       })
       

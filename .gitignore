@@ -12,6 +12,13 @@ config/
 
 # Workspaces
 workspaces/
+workspace/
+*.workspace/
+
+# Runtime directories (generated at runtime)
+sessions/
+memory/
+skills/
 
 # Test files
 test/

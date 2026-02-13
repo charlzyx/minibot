@@ -8,7 +8,8 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 
 - 🚀 **Fast & Lightweight** - Hono framework for maximum performance
 - 🔒 **Type-Safe** - Full TypeScript coverage
-- 💾 **Persistent Memory** - SQLite based long-term storage
+- 💾 **Persistent Memory** - SQLite + Markdown hybrid storage
+- 🗂️ **Session Management** - JSONL-based session isolation and persistence
 - 🔌 **Multiple LLM Providers** - Zhipu, OpenAI, DeepSeek, Dashscope, Qwen, etc.
 - 💬 **Multi-Platform** - Feishu with reply reference support
 - 🛠️ **Tool System** - Built-in tools with easy extension
@@ -58,47 +59,28 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 
 ```
 minibot/
-├── src/
-│   ├── index.ts              # Hono app entry point
-│   ├── agent/              # Core agent logic
-│   │   ├── index.ts        # Agent implementation
-│   │   └── DESIGN.md       # Agent design documentation
-│   ├── channels/           # Chat platform integrations
-│   │   ├── feishu.ts      # Feishu (WebSocket) with reply reference
-│   │   └── DESIGN.md       # Channels design documentation
-│   ├── tools/              # Built-in tools
-│   │   ├── file.ts         # File operations
-│   │   ├── shell.ts        # Shell command execution
-│   │   ├── web.ts         # HTTP requests
-│   │   ├── llm.ts         # LLM API calls
-│   │   ├── index.ts        # Tool registry
-│   │   └── DESIGN.md      # Tools design documentation
-│   ├── memory/             # Persistent memory (SQLite)
-│   │   ├── manager.ts      # Memory manager implementation
-│   │   └── DESIGN.md      # Memory design documentation
-│   ├── config/             # Configuration management
-│   │   ├── manager.ts      # Config manager
-│   │   ├── schema.ts      # Config schema
-│   │   └── DESIGN.md      # Config design documentation
-│   ├── cron/               # Scheduled task system
-│   │   ├── parser.ts       # Cron expression parser
-│   │   ├── executor.ts     # Shell script executor
-│   │   ├── workspace.ts    # Workspace isolation system
-│   │   ├── subagent.ts     # Subagent manager
-│   │   ├── error-handler.ts # Error handling and retry
-│   │   ├── scheduler.ts    # Cron scheduler
-│   │   ├── config.ts       # Configuration examples
-│   │   ├── index.ts        # Module exports
-│   │   └── DESIGN.md      # Cron design documentation
-│   └── cron-demo.ts        # Cron system demo
-├── db/
-│   └── memory.db          # SQLite database (gitignored)
-├── workspaces/            # Task workspaces (gitignored)
-├── package.json
-├── tsconfig.json
-├── README.md              # This file
-├── CRON_README.md        # Cron system documentation
-└── CRON_DEPLOYMENT.md    # Cron deployment guide
+├── src/                    # 源代码目录
+│   ├── agent/              # Agent 核心逻辑
+│   ├── channels/           # 消息通道（飞书、微信等）
+│   ├── cron/               # 定时任务系统
+│   ├── memory/             # 记忆管理
+│   ├── session/            # 会话管理
+│   ├── tools/              # 工具系统
+│   ├── index.ts            # 主入口文件
+│   └── cron-demo.ts       # 定时任务示例
+├── test/                  # 单元测试
+├── tests/                 # 集成测试
+├── $HOME/minibot/         # 工作目录（运行时生成）
+│   ├── sessions/           # 会话存储
+│   ├── memory/             # 记忆存储（Markdown）
+│   ├── db/                # SQLite 数据库
+│   ├── minibot.config.ts   # 配置文件
+│   └── workspaces/         # 任务工作区
+├── package.json          # 项目配置
+├── tsconfig.json        # TypeScript 配置
+├── README.md            # 项目说明
+├── CRON_README.md      # 定时任务文档
+└── CRON_DEPLOYMENT.md    # 定时任务部署指南
 ```
 
 ## 🚀 Quick Start
@@ -134,8 +116,11 @@ PORT=18790
 # Install dependencies
 npm install
 
-# Run dev server
+# Run dev server (default workspace: $HOME/minibot)
 npm run dev
+
+# Run dev server with custom workspace
+npm run dev -- --workspace=/path/to/workspace
 
 # Build
 npm run build
@@ -143,10 +128,30 @@ npm run build
 # Run production server
 npm run start
 
+# Run production server with custom workspace
+npm start -- --workspace=/path/to/workspace
+
 # Run cron demo
 npm run build
 node dist/cron-demo.js
 ```
+
+### Workspace
+
+By default, minibot uses `$HOME/minibot` as the workspace directory. You can specify a custom workspace using the `--workspace` parameter:
+
+```bash
+npm run dev -- --workspace=/custom/path/to/workspace
+```
+
+The workspace contains:
+- `sessions/` - Session storage
+- `memory/` - Memory files (Markdown)
+- `db/` - SQLite database
+- `workspaces/` - Task workspaces
+- `minibot.config.ts` - Configuration file
+
+This allows you to run multiple instances of minibot with different workspaces.
 
 ## 🎯 Core Modules
 
@@ -184,21 +189,66 @@ Tools module provides executable operations that can be called by the Agent.
 - **Shell Tool**: Execute shell commands with timeout and environment variables
 - **Web Tool**: Make HTTP requests (GET, POST, PUT, DELETE)
 - **LLM Tool**: Call LLM APIs for conversation generation
+- **Memory Tool**: Store, search, and retrieve memories
 
 **Documentation**: [Tools Design](src/tools/DESIGN.md)
 
 ### Memory
 
-Memory module provides persistent storage using SQLite.
+Memory module provides persistent storage using SQLite + Markdown hybrid approach.
 
 **Features**:
-- SQLite-based storage
-- Tag system for categorization
+- SQLite-based storage with tag system
+- Daily notes in Markdown format (`memory/YYYY-MM-DD.md`)
+- Long-term memory in Markdown format (`memory/MEMORY.md`)
 - Content search with fuzzy matching
 - Recent memories retrieval
+- Memory context generation for LLM
 - Embedding vector support (for future semantic search)
 
 **Documentation**: [Memory Design](src/memory/DESIGN.md)
+
+### Session
+
+Session module provides conversation history management with isolation.
+
+**Features**:
+- JSONL-based session storage (`sessions/{key}.jsonl`)
+- Session isolation by platform and chat ID
+- Message history with timestamps
+- In-memory caching for performance
+- Automatic session cleanup
+- Support for group and private chats
+- Configurable message history limit
+
+**Documentation**: [Session Design](src/session/DESIGN.md)
+
+### Commands
+
+Commands module provides a command system for quick operations.
+
+**Features**:
+- Slash command support (`/command`)
+- Built-in commands: `/help`, `/reset`, `/skills`, `/status`
+- Extensible command registration
+- Command help generation
+- Error handling
+
+**Documentation**: [Commands Design](src/commands/DESIGN.md)
+
+### Skills
+
+Skills module provides a Markdown-based skill system inspired by nanobot.
+
+**Features**:
+- Markdown skill files with YAML frontmatter
+- Automatic skill loading from `$HOME/minibot/skills/`
+- Skill injection into agent's system prompt
+- Skill categorization with tags
+- REST API for skill management
+- Example skills included
+
+**Documentation**: [Skills Design](src/skills/DESIGN.md)
 
 ### Config
 
@@ -292,6 +342,80 @@ await scheduler.addJob({
 - `0 */30 * * * *` - Every 30 seconds (6-segment)
 
 For more details, see [Cron README](CRON_README.md)
+
+## 🗂️ Session Management
+
+### Quick Start
+
+```typescript
+import { getSessionManager } from './session'
+
+const sessionManager = getSessionManager()
+
+// Get or create session
+const session = sessionManager.getOrCreate('feishu:oc_xxx')
+
+// Add messages
+sessionManager.addMessage('feishu:oc_xxx', 'user', '你好')
+sessionManager.addMessage('feishu:oc_xxx', 'assistant', '你好！有什么我可以帮助你的？')
+
+// Get message history
+const history = sessionManager.getMessages('feishu:oc_xxx', 20)
+
+// Save session
+await sessionManager.save(session)
+
+// List all sessions
+const sessions = await sessionManager.listSessions()
+
+// Cleanup expired sessions
+await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000) // 7 days
+```
+
+### Session Isolation
+
+Sessions are isolated by platform and chat ID:
+- **Private Chat**: `{platform}:{userId}` (e.g., `feishu:oc_xxx`)
+- **Group Chat**: `{platform}:{chatId}` (e.g., `feishu:oc_xxxxxxxxxxxxx`)
+
+This ensures each conversation has its own context and history.
+
+## 💾 Memory Management
+
+### Quick Start
+
+```typescript
+import { getMemoryManager } from './memory'
+
+const memoryManager = getMemoryManager()
+
+// Store memory with tags
+await memoryManager.store('User likes programming', ['user', 'preference'])
+
+// Search memories
+const results = await memoryManager.search('programming')
+
+// Get recent memories
+const recent = await memoryManager.getRecentMemories(7) // 7 days
+
+// Daily notes
+await memoryManager.appendToday('User asked about TypeScript')
+const today = await memoryManager.readToday()
+
+// Long-term memory
+await memoryManager.writeLongTerm('Important: User is a developer')
+const longTerm = await memoryManager.readLongTerm()
+
+// Get memory context for LLM
+const context = await memoryManager.getMemoryContext()
+```
+
+### Memory Storage
+
+The memory system uses a hybrid approach:
+- **SQLite**: For tagged memories with search capabilities
+- **Daily Notes**: Markdown files (`memory/YYYY-MM-DD.md`) for daily logs
+- **Long-term Memory**: Markdown file (`memory/MEMORY.md`) for persistent information
 
 ## 🔧 Configuration
 
@@ -388,7 +512,8 @@ Inspired by:
 |---------|----------|----------|
 | Language | Python | TypeScript |
 | Framework | Custom | Hono |
-| Memory | Text files (JSONL) | SQLite |
+| Memory | Text files (JSONL) | SQLite + Markdown |
+| Session | JSONL files | JSONL files + Cache |
 | Type Safety | Dynamic | Static (TS) |
 | Performance | Excellent | Excellent |
 | Cron System | ✅ | ✅ (Enhanced) |
@@ -403,6 +528,7 @@ Inspired by:
 - [Channels Design](src/channels/DESIGN.md) - Messaging platform integration
 - [Tools Design](src/tools/DESIGN.md) - Tool system documentation
 - [Memory Design](src/memory/DESIGN.md) - Memory management
+- [Session Design](src/session/DESIGN.md) - Session management
 - [Config Design](src/config/DESIGN.md) - Configuration system
 - [Cron Design](src/cron/DESIGN.md) - Scheduled task system
 - [Cron README](CRON_README.md) - Cron system user guide

@@ -23,7 +23,9 @@ type MessageHandler = (message: FeishuMessage) => Promise<void>
 
 let wsClient: lark.WSClient | null = null
 let messageHandler: MessageHandler | null = null
-const processedMessageIds = new Map<string, boolean>()
+const processedMessageIds = new Map<string, number>()
+const messageQueue: Array<() => Promise<void>> = []
+let isProcessingQueue = false
 
 export class FeishuChannel {
   private client: lark.Client
@@ -38,6 +40,7 @@ export class FeishuChannel {
   }
 
   async sendMessage(content: string, receiveId: string, parentId?: string): Promise<{ message_id: string; data: any }> {
+    console.log('[FeishuChannel] sendMessage called:', { contentLength: content.length, receiveId, parentId })
     const result = await this.client.im.message.create({
       params: {
         receive_id_type: 'open_id'
@@ -51,6 +54,8 @@ export class FeishuChannel {
         ...(parentId && { reply_in_thread: { message_id: parentId } })
       }
     })
+
+    console.log('[FeishuChannel] API response:', { code: result.code, msg: result.msg, messageId: result.data?.message_id })
 
     if (result.code !== 0) {
       throw new Error(`Feishu API error: ${result.code} - ${result.msg}`)
@@ -133,19 +138,50 @@ export class FeishuChannel {
 }
 
 function isMessageProcessed(messageId: string): boolean {
+  const now = Date.now()
+  const maxAge = 5 * 60 * 1000 // 5 minutes
+  
   if (processedMessageIds.has(messageId)) {
-    return true
+    const timestamp = processedMessageIds.get(messageId)!
+    if (now - timestamp < maxAge) {
+      return true
+    }
   }
   
-  processedMessageIds.set(messageId, true)
+  processedMessageIds.set(messageId, now)
   
-  if (processedMessageIds.size > 1000) {
-    const keys = Array.from(processedMessageIds.keys())
-    const toDelete = keys.slice(0, 500)
-    toDelete.forEach(k => processedMessageIds.delete(k))
+  if (processedMessageIds.size > 5000) {
+    for (const [id, timestamp] of processedMessageIds.entries()) {
+      if (now - timestamp > maxAge) {
+        processedMessageIds.delete(id)
+      }
+    }
   }
   
   return false
+}
+
+async function processMessageQueue(): Promise<void> {
+  if (isProcessingQueue || messageQueue.length === 0) {
+    return
+  }
+  
+  isProcessingQueue = true
+  console.log(`[Feishu] Processing message queue, size: ${messageQueue.length}`)
+  
+  while (messageQueue.length > 0) {
+    const task = messageQueue.shift()
+    if (task) {
+      try {
+        await task()
+      } catch (error) {
+        console.error('[Feishu] Error processing queued message:', error)
+      }
+    }
+  }
+  
+  isProcessingQueue = false
+  console.log('[Feishu] Message queue processing completed')
 }
 
 export function startFeishuWS(
@@ -165,63 +201,80 @@ export function startFeishuWS(
 
   eventDispatcher.register({
     'im.message.receive_v1': async (data: any) => {
-      console.log('[Feishu] ✅ Event matched: im.message.receive_v1')
+      try {
+        console.log('[Feishu] ✅ Event matched: im.message.receive_v1')
 
-      const message = data.message
-      if (!message) {
-        console.log('[Feishu] No message in event data')
-        return
-      }
-
-      const messageId = message.message_id
-      
-      if (isMessageProcessed(messageId)) {
-        console.log(`[Feishu] Duplicate message ignored: ${messageId}`)
-        return
-      }
-
-      const chatId = message.chat_id
-      const content = message.content
-      const msgType = message.message_type
-      const chatType = message.chat_type
-
-      let userOpenId = ''
-      if (data.sender && data.sender.sender_id) {
-        userOpenId = data.sender.sender_id.open_id || ''
-      }
-
-      const senderType = data.sender?.sender_type || ''
-      if (senderType === 'bot') {
-        console.log('[Feishu] Ignoring bot message')
-        return
-      }
-
-      await feishuChannel.addReaction(messageId, 'THUMBSUP')
-      console.log('[Feishu] Added THUMBSUP reaction')
-
-      if (msgType === 'text' && content && userOpenId) {
-        try {
-          const textContent = JSON.parse(content).text
-          console.log('[Feishu] Message:', { userOpenId, textContent, messageId, chatType })
-
-          if (messageHandler) {
-            const replyTo = chatType === 'group' ? chatId : userOpenId
-            
-            await messageHandler({
-              message_id: messageId,
-              msg_type: msgType,
-              chat_id: chatId,
-              content: textContent,
-              sender_id: {
-                open_id: userOpenId
-              }
-            })
-          }
-        } catch (e) {
-          console.error('[Feishu] Failed to parse message content:', e)
+        const message = data.message
+        if (!message) {
+          console.log('[Feishu] No message in event data')
+          return
         }
-      } else {
-        console.log(`[Feishu] Unsupported message type: ${msgType}`)
+
+        const messageId = message.message_id
+        
+        if (isMessageProcessed(messageId)) {
+          console.log(`[Feishu] Duplicate message ignored: ${messageId}`)
+          return
+        }
+
+        const chatId = message.chat_id
+        const content = message.content
+        const msgType = message.message_type
+        const chatType = message.chat_type
+
+        let userOpenId = ''
+        if (data.sender && data.sender.sender_id) {
+          userOpenId = data.sender.sender_id.open_id || ''
+        }
+
+        const senderType = data.sender?.sender_type || ''
+        if (senderType === 'bot') {
+          console.log('[Feishu] Ignoring bot message')
+          return
+        }
+
+        await feishuChannel.addReaction(messageId, 'THUMBSUP')
+        console.log('[Feishu] Added THUMBSUP reaction')
+
+        if (msgType === 'text' && content && userOpenId) {
+          try {
+            const textContent = JSON.parse(content).text
+            console.log('[Feishu] Message:', { userOpenId, textContent, messageId, chatType })
+
+            if (messageHandler) {
+              console.log('[Feishu] Queuing message handler...')
+              
+              const replyTo = chatType === 'group' ? chatId : userOpenId
+              
+              messageQueue.push(async () => {
+                try {
+                  await messageHandler!({
+                    message_id: messageId,
+                    msg_type: msgType,
+                    chat_id: chatId,
+                    content: textContent,
+                    sender_id: {
+                      open_id: userOpenId
+                    }
+                  })
+                  console.log('[Feishu] Message handler completed')
+                } catch (error) {
+                  console.error('[Feishu] Message handler error:', error)
+                }
+              })
+              
+              processMessageQueue()
+            } else {
+              console.log('[Feishu] No message handler registered')
+            }
+          } catch (e) {
+            console.error('[Feishu] Failed to parse message content:', e)
+          }
+        } else {
+          console.log(`[Feishu] Unsupported message type: ${msgType}, content: ${content ? 'exists' : 'missing'}, userOpenId: ${userOpenId}`)
+        }
+      } catch (error) {
+        console.error('[Feishu] Error processing message:', error)
       }
     }
   })

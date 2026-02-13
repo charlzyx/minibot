@@ -77,7 +77,7 @@ export const ToolSchema = z.object({
   }).optional(),
   file: z.object({
     enabled: z.boolean().default(true),
-    workspace: z.string().default('.'),
+    workspace: z.string().default(process.env.HOME + '/minibot'),
   }).optional(),
 })
 

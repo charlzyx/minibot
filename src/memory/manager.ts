@@ -1,7 +1,18 @@
 import sqlite3 from 'better-sqlite3'
 import path from 'path'
+import fs from 'fs/promises'
+import { existsSync } from 'fs'
+import { getWorkspace } from '../config/manager'
 
-const DB_PATH = path.join(process.cwd(), 'db', 'memory.db')
+function getDBPath(): string {
+  const workspace = getWorkspace()
+  return path.join(workspace, 'db', 'memory.db')
+}
+
+function getMemoryDir(): string {
+  const workspace = getWorkspace()
+  return path.join(workspace, 'memory')
+}
 
 interface MemoryRow {
   id: number
@@ -25,7 +36,11 @@ export class MemoryManager {
   private db: sqlite3.Database
 
   constructor() {
-    this.db = new sqlite3(DB_PATH)
+    const dbDir = path.dirname(getDBPath())
+    if (!existsSync(dbDir)) {
+      fs.mkdir(dbDir, { recursive: true })
+    }
+    this.db = new sqlite3(getDBPath())
     this.initialize()
   }
 
@@ -147,6 +162,114 @@ export class MemoryManager {
   private serializeEmbedding(embedding: number[]): Buffer {
     const float64Array = new Float64Array(embedding)
     return Buffer.from(float64Array.buffer)
+  }
+
+  private async ensureMemoryDir() {
+    const memoryDir = getMemoryDir()
+    if (!existsSync(memoryDir)) {
+      await fs.mkdir(memoryDir, { recursive: true })
+    }
+  }
+
+  private getTodayDate(): string {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  private getTodayFilePath(): string {
+    return path.join(getMemoryDir(), `${this.getTodayDate()}.md`)
+  }
+
+  async readToday(): Promise<string> {
+    await this.ensureMemoryDir()
+    const todayFile = this.getTodayFilePath()
+    
+    if (existsSync(todayFile)) {
+      return await fs.readFile(todayFile, 'utf-8')
+    }
+    
+    return ''
+  }
+
+  async appendToday(content: string): Promise<void> {
+    await this.ensureMemoryDir()
+    const todayFile = this.getTodayFilePath()
+    
+    let fileContent = ''
+    if (existsSync(todayFile)) {
+      fileContent = await fs.readFile(todayFile, 'utf-8')
+    } else {
+      const header = `# ${this.getTodayDate()}\n\n`
+      fileContent = header
+    }
+    
+    const newContent = fileContent + content + '\n'
+    await fs.writeFile(todayFile, newContent, 'utf-8')
+  }
+
+  private getLongTermMemoryPath(): string {
+    return path.join(getMemoryDir(), 'MEMORY.md')
+  }
+
+  async readLongTerm(): Promise<string> {
+    await this.ensureMemoryDir()
+    const memoryFile = this.getLongTermMemoryPath()
+    
+    if (existsSync(memoryFile)) {
+      return await fs.readFile(memoryFile, 'utf-8')
+    }
+    
+    return ''
+  }
+
+  async writeLongTerm(content: string): Promise<void> {
+    await this.ensureMemoryDir()
+    const memoryFile = this.getLongTermMemoryPath()
+    await fs.writeFile(memoryFile, content, 'utf-8')
+  }
+
+  async getRecentMemories(days: number = 7): Promise<string> {
+    await this.ensureMemoryDir()
+    const memories: string[] = []
+    const now = new Date()
+    
+    for (let i = 0; i < days; i++) {
+      const date = new Date(now)
+      date.setDate(date.getDate() - i)
+      
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const dateStr = `${year}-${month}-${day}`
+      
+      const filePath = path.join(getMemoryDir(), `${dateStr}.md`)
+      
+      if (existsSync(filePath)) {
+        const content = await fs.readFile(filePath, 'utf-8')
+        memories.push(content)
+      }
+    }
+    
+    return memories.join('\n\n---\n\n')
+  }
+
+  async getMemoryContext(): Promise<string> {
+    const parts: string[] = []
+    
+    const longTerm = await this.readLongTerm()
+    if (longTerm) {
+      parts.push('## Long-term Memory\n' + longTerm)
+    }
+    
+    const today = await this.readToday()
+    if (today) {
+      parts.push('## Today\'s Notes\n' + today)
+    }
+    
+    return parts.join('\n\n')
   }
 
   close() {
