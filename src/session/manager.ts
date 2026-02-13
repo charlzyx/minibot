@@ -27,6 +27,7 @@ export interface Session {
   created_at: number
   updated_at: number
   metadata: Record<string, any>
+  activeSkill?: string
 }
 
 class SessionManager {

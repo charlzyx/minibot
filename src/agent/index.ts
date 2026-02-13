@@ -165,7 +165,7 @@ export class Agent {
     const messages: any[] = [
       {
         role: 'system',
-        content: this.buildSystemPrompt(config)
+        content: this.buildSystemPrompt(config, context)
       }
     ]
     
@@ -186,7 +186,11 @@ export class Agent {
     return messages
   }
 
-  private buildSystemPrompt(config: Config): string {
+  private buildSystemPrompt(config: Config, context: AgentContext): string {
+    const sessionManager = getSessionManager()
+    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+    const session = sessionManager.getOrCreate(sessionId)
+    
     const skillsPrompt = this.skillManager.getSkillsPrompt()
     
     let prompt = `You are an AI assistant that helps users solve problems.
@@ -212,6 +216,16 @@ Configuration:
 - Max tokens: ${config.model.maxTokens}
 
 Provide accurate and helpful responses to user requests.`
+
+    if (session.activeSkill === 'claude-code') {
+      prompt += `\n\nYou are currently in Claude Code mode. Focus on programming tasks including:
+- Writing high-quality code following best practices
+- Debugging and fixing errors
+- Refactoring and optimizing code
+- Code review and improvement suggestions
+
+IMPORTANT: Provide timely status updates during execution. Report progress and intermediate results immediately. If you encounter any errors, notify the user right away with clear error information and suggested solutions.`
+    }
 
     if (skillsPrompt) {
       prompt += `\n\n${skillsPrompt}`

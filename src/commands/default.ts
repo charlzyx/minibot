@@ -74,5 +74,35 @@ export const defaultCommands: Command[] = [
       
       return status
     }
+  },
+  {
+    name: 'code',
+    description: '启动 Claude Code 编程助手',
+    usage: '/code [任务描述]',
+    handler: async (args, context) => {
+      const sessionManager = getSessionManager()
+      const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+      
+      const session = sessionManager.getOrCreate(sessionId)
+      session.activeSkill = 'claude-code'
+      await sessionManager.save(session)
+      
+      let response = '🤖 **Claude Code 助手已启动**\n\n'
+      
+      if (args.length > 0) {
+        const task = args.join(' ')
+        response += `任务: ${task}\n\n`
+      }
+      
+      response += `我现在可以帮助你完成以下编程任务：\n\n`
+      response += `- 📝 代码编写\n`
+      response += `- 🐛 代码调试\n`
+      response += `- ♻️ 代码重构\n`
+      response += `- 🔍 代码审查\n\n`
+      response += `我会及时反馈执行状态，遇到问题立即通知。\n\n`
+      response += `请告诉我你需要什么帮助！`
+      
+      return response
+    }
   }
 ]
