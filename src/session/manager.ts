@@ -1,6 +1,6 @@
 import path from 'path'
 import fs from 'fs/promises'
-import { existsSync } from 'fs'
+import * as syncFs from 'fs'
 import { getWorkspace } from '../config/manager'
 
 export interface SessionMessage {
@@ -42,7 +42,7 @@ class SessionManager {
   }
 
   private async initialize() {
-    if (!existsSync(this.sessionsDir)) {
+    if (!syncFs.existsSync(this.sessionsDir)) {
       await fs.mkdir(this.sessionsDir, { recursive: true })
     }
   }
@@ -75,12 +75,12 @@ class SessionManager {
   private load(key: string): Session | null {
     const sessionPath = this.getSessionPath(key)
     
-    if (!existsSync(sessionPath)) {
+    if (!syncFs.existsSync(sessionPath)) {
       return null
     }
 
     try {
-      const content = require('fs').readFileSync(sessionPath, 'utf-8')
+      const content = syncFs.readFileSync(sessionPath, 'utf-8')
       const lines = content.split('\n').filter((line: string) => line.trim())
       
       let messages: SessionMessage[] = []
@@ -177,7 +177,7 @@ class SessionManager {
     this.cache.delete(key)
     const sessionPath = this.getSessionPath(key)
     
-    if (existsSync(sessionPath)) {
+    if (syncFs.existsSync(sessionPath)) {
       await fs.unlink(sessionPath)
       return true
     }

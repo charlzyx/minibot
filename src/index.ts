@@ -399,7 +399,7 @@ async function initializeFeishuWS() {
             
             console.log('[Feishu] Agent response received:', response.substring(0, 100))
             console.log('[Feishu] 📤 Sending reply...')
-            await feishuChannel.sendCardMessage(response, userId)
+            await feishuChannel.replyMessage(messageId, response, false)
             console.log('[Feishu] ✅ Reply sent successfully!')
           } catch (error) {
             console.error('[Feishu] ❌ Failed to reply:', error)

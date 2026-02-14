@@ -25,7 +25,9 @@ let wsClient: lark.WSClient | null = null
 let messageHandler: MessageHandler | null = null
 const processedMessageIds = new Map<string, number>()
 const messageQueue: Array<() => Promise<void>> = []
+const pendingMessages: FeishuMessage[] = []
 let isProcessingQueue = false
+let messageCounter = 0
 
 export class FeishuChannel {
   private client: lark.Client
@@ -56,6 +58,37 @@ export class FeishuChannel {
     })
 
     console.log('[FeishuChannel] API response:', { code: result.code, msg: result.msg, messageId: result.data?.message_id })
+
+    if (result.code !== 0) {
+      throw new Error(`Feishu API error: ${result.code} - ${result.msg}`)
+    }
+
+    if (!result.data || !result.data.message_id) {
+      throw new Error('Feishu API error: no message_id returned')
+    }
+
+    return {
+      message_id: result.data.message_id,
+      data: {}
+    }
+  }
+
+  async replyMessage(messageId: string, content: string, replyInThread: boolean = false): Promise<{ message_id: string; data: any }> {
+    console.log('[FeishuChannel] replyMessage called:', { messageId, contentLength: content.length, replyInThread })
+    const result = await this.client.im.message.reply({
+      path: {
+        message_id: messageId
+      },
+      data: {
+        content: JSON.stringify({
+          text: content
+        }),
+        msg_type: 'text',
+        reply_in_thread: replyInThread
+      }
+    })
+
+    console.log('[FeishuChannel] Reply API response:', { code: result.code, msg: result.msg, messageId: result.data?.message_id })
 
     if (result.code !== 0) {
       throw new Error(`Feishu API error: ${result.code} - ${result.msg}`)
@@ -141,47 +174,115 @@ function isMessageProcessed(messageId: string): boolean {
   const now = Date.now()
   const maxAge = 5 * 60 * 1000 // 5 minutes
   
+  console.log(`[Feishu] 🕵️ Checking if message processed: ${messageId}`)
+  
   if (processedMessageIds.has(messageId)) {
     const timestamp = processedMessageIds.get(messageId)!
+    console.log(`[Feishu] 🕵️ Message ${messageId} was processed at ${new Date(timestamp).toISOString()}`)
     if (now - timestamp < maxAge) {
+      console.log(`[Feishu] 🕵️ Duplicate message ignored: ${messageId}`)
       return true
+    } else {
+      console.log(`[Feishu] 🕵️ Message ${messageId} expired, reprocessing`)
     }
   }
   
   processedMessageIds.set(messageId, now)
+  console.log(`[Feishu] 🕵️ Marking message ${messageId} as processed`)
   
   if (processedMessageIds.size > 5000) {
+    console.log(`[Feishu] 🕵️ Cleaning up old messages, current size: ${processedMessageIds.size}`)
     for (const [id, timestamp] of processedMessageIds.entries()) {
       if (now - timestamp > maxAge) {
         processedMessageIds.delete(id)
       }
     }
+    console.log(`[Feishu] 🕵️ Cleanup completed, new size: ${processedMessageIds.size}`)
   }
   
+  console.log(`[Feishu] 🕵️ Message ${messageId} is new, processing`)
   return false
 }
 
 async function processMessageQueue(): Promise<void> {
-  if (isProcessingQueue || messageQueue.length === 0) {
+  if (isProcessingQueue) {
+    console.log('[Feishu] 🚶 Queue already being processed, will check later')
+    setTimeout(() => {
+      if (messageQueue.length > 0 || pendingMessages.length > 0) {
+        processMessageQueue()
+      }
+    }, 100)
     return
   }
   
   isProcessingQueue = true
-  console.log(`[Feishu] Processing message queue, size: ${messageQueue.length}`)
+  console.log(`[Feishu] 📋 Starting queue processing, queue: ${messageQueue.length}, pending: ${pendingMessages.length}`)
   
-  while (messageQueue.length > 0) {
-    const task = messageQueue.shift()
-    if (task) {
-      try {
-        await task()
-      } catch (error) {
-        console.error('[Feishu] Error processing queued message:', error)
+  try {
+    let processedCount = 0
+    
+    while (messageQueue.length > 0) {
+      console.log(`[Feishu] 📋 Processing main queue message, remaining: ${messageQueue.length}`)
+      const task = messageQueue.shift()
+      if (task) {
+        try {
+          await task()
+          processedCount++
+          console.log(`[Feishu] ✅ Processed main queue message, count: ${processedCount}`)
+        } catch (error) {
+          console.error('[Feishu] ❌ Error processing main queue message:', error)
+        }
       }
     }
+    
+    if (messageQueue.length === 0 && pendingMessages.length > 0) {
+      console.log(`[Feishu] 📋 Batch processing pending messages, size: ${pendingMessages.length}`)
+      
+      const messagesToProcess = pendingMessages.splice(0, pendingMessages.length)
+      console.log(`[Feishu] 📋 Moved ${messagesToProcess.length} messages from pending to processing`)
+      
+      if (messagesToProcess.length > 0 && messageHandler) {
+        try {
+          const firstMessage = messagesToProcess[0]
+          const userOpenId = firstMessage.sender_id?.open_id || ''
+          
+          if (messagesToProcess.length === 1) {
+            console.log('[Feishu] 📋 Processing single pending message')
+            await messageHandler(firstMessage)
+            processedCount++
+          } else {
+            const combinedContent = messagesToProcess.map(m => m.content).join('\n')
+            console.log(`[Feishu] 📋 Processing ${messagesToProcess.length} pending messages combined`)
+            
+            await messageHandler({
+              message_id: firstMessage.message_id,
+              msg_type: firstMessage.msg_type,
+              chat_id: firstMessage.chat_id,
+              content: combinedContent,
+              sender_id: firstMessage.sender_id
+            })
+            processedCount++
+          }
+          
+          console.log(`[Feishu] ✅ Processed pending messages, count: ${processedCount}`)
+        } catch (error) {
+          console.error('[Feishu] ❌ Error processing pending messages:', error)
+        }
+      }
+    }
+    
+    console.log(`[Feishu] 🎉 Queue processing completed, processed: ${processedCount}`)
+  } finally {
+    isProcessingQueue = false
+    console.log(`[Feishu] 📋 Queue processing finished, queue: ${messageQueue.length}, pending: ${pendingMessages.length}`)
+    
+    if (messageQueue.length > 0 || pendingMessages.length > 0) {
+      console.log(`[Feishu] 🔄 New messages in queues, processing again...`)
+      setTimeout(processMessageQueue, 0)
+    } else {
+      console.log('[Feishu] 📋 All queues are empty, waiting for new messages')
+    }
   }
-  
-  isProcessingQueue = false
-  console.log('[Feishu] Message queue processing completed')
 }
 
 export function startFeishuWS(
@@ -202,18 +303,34 @@ export function startFeishuWS(
   eventDispatcher.register({
     'im.message.receive_v1': async (data: any) => {
       try {
-        console.log('[Feishu] ✅ Event matched: im.message.receive_v1')
+        messageCounter++
+        const msgNum = messageCounter
+        console.log(`[Feishu] 🔔 [${msgNum}] Event received: im.message.receive_v1`)
+        console.log(`[Feishu] 🔔 [${msgNum}] Event data:`, {
+          messageId: data?.message?.message_id,
+          timestamp: new Date().toISOString(),
+          eventType: data?.header?.event_type,
+          fullData: JSON.stringify(data).substring(0, 500)
+        })
 
         const message = data.message
         if (!message) {
-          console.log('[Feishu] No message in event data')
+          console.log(`[Feishu] ❌ [${msgNum}] No message in event data`)
+          console.log(`[Feishu] ❌ [${msgNum}] Full event data:`, data)
           return
         }
 
         const messageId = message.message_id
+        if (!messageId) {
+          console.log(`[Feishu] ❌ [${msgNum}] No message_id in message`)
+          console.log(`[Feishu] ❌ [${msgNum}] Message data:`, message)
+          return
+        }
+        
+        console.log(`[Feishu] 📍 [${msgNum}] Processing message:`, messageId)
         
         if (isMessageProcessed(messageId)) {
-          console.log(`[Feishu] Duplicate message ignored: ${messageId}`)
+          console.log(`[Feishu] ⚠️  [${msgNum}] Duplicate message ignored: ${messageId}`)
           return
         }
 
@@ -229,52 +346,94 @@ export function startFeishuWS(
 
         const senderType = data.sender?.sender_type || ''
         if (senderType === 'bot') {
-          console.log('[Feishu] Ignoring bot message')
+          console.log(`[Feishu] ❌ [${msgNum}] Ignoring bot message`)
           return
         }
 
-        await feishuChannel.addReaction(messageId, 'THUMBSUP')
-        console.log('[Feishu] Added THUMBSUP reaction')
+        console.log(`[Feishu] 📥 [${msgNum}] Received event:`, {
+          eventName: 'im.message.receive_v1',
+          messageId: messageId,
+          userOpenId: userOpenId,
+          chatId: chatId,
+          chatType: chatType,
+          msgType: msgType,
+          senderType: senderType,
+          timestamp: new Date().toISOString()
+        })
 
         if (msgType === 'text' && content && userOpenId) {
           try {
             const textContent = JSON.parse(content).text
-            console.log('[Feishu] Message:', { userOpenId, textContent, messageId, chatType })
+            console.log(`[Feishu] 📝 [${msgNum}] Message content:`, {
+              userOpenId: userOpenId,
+              textContent: textContent,
+              messageId: messageId,
+              chatType: chatType,
+              timestamp: new Date().toISOString()
+            })
 
             if (messageHandler) {
-              console.log('[Feishu] Queuing message handler...')
+              console.log(`[Feishu] 📋 [${msgNum}] Queuing message handler...`)
+              console.log(`[Feishu] 📋 [${msgNum}] Current queue size:`, messageQueue.length)
+              console.log(`[Feishu] 📋 [${msgNum}] Current pending size:`, pendingMessages.length)
+              console.log(`[Feishu] 📋 [${msgNum}] Is processing:`, isProcessingQueue)
               
               const replyTo = chatType === 'group' ? chatId : userOpenId
               
-              messageQueue.push(async () => {
-                try {
-                  await messageHandler!({
-                    message_id: messageId,
-                    msg_type: msgType,
-                    chat_id: chatId,
-                    content: textContent,
-                    sender_id: {
-                      open_id: userOpenId
-                    }
-                  })
-                  console.log('[Feishu] Message handler completed')
-                } catch (error) {
-                  console.error('[Feishu] Message handler error:', error)
-                }
-              })
+              console.log(`[Feishu] 🚀 [${msgNum}] Adding READ reaction for:`, messageId)
+              await feishuChannel.addReaction(messageId, 'EYES')
+              console.log(`[Feishu] ✅ [${msgNum}] Added READ reaction for:`, messageId)
               
-              processMessageQueue()
+              const feishuMessage: FeishuMessage = {
+                message_id: messageId,
+                msg_type: msgType,
+                chat_id: chatId,
+                content: textContent,
+                sender_id: {
+                  open_id: userOpenId
+                }
+              }
+              
+              const task = async () => {
+                try {
+                  console.log(`[Feishu] 🚀 [${msgNum}] Adding PROCESSING reaction for:`, messageId)
+                  await feishuChannel.addReaction(messageId, 'THUMBSUP')
+                  console.log(`[Feishu] ✅ [${msgNum}] Added PROCESSING reaction for:`, messageId)
+                  
+                  console.log(`[Feishu] 🚀 [${msgNum}] Processing queued message:`, messageId)
+                  await messageHandler!(feishuMessage)
+                  console.log(`[Feishu] 🎉 [${msgNum}] Message handler completed:`, messageId)
+                } catch (error) {
+                  console.error(`[Feishu] ❌ [${msgNum}] Message handler error:`, error)
+                }
+              }
+              
+              if (isProcessingQueue) {
+                pendingMessages.push(feishuMessage)
+                console.log(`[Feishu] 📋 [${msgNum}] Message added to pending queue, new size:`, pendingMessages.length)
+                
+                console.log(`[Feishu] 🚀 [${msgNum}] Adding WAITING reaction for:`, messageId)
+                await feishuChannel.addReaction(messageId, 'THUMBSUP')
+                console.log(`[Feishu] ✅ [${msgNum}] Added WAITING reaction for:`, messageId)
+              } else {
+                messageQueue.push(task)
+                console.log(`[Feishu] 📋 [${msgNum}] Message added to main queue, new size:`, messageQueue.length)
+              }
+              
+              setTimeout(() => {
+                processMessageQueue()
+              }, 0)
             } else {
-              console.log('[Feishu] No message handler registered')
+              console.log(`[Feishu] ❌ [${msgNum}] No message handler registered`)
             }
           } catch (e) {
-            console.error('[Feishu] Failed to parse message content:', e)
+            console.error(`[Feishu] ❌ [${msgNum}] Failed to parse message content:`, e)
           }
         } else {
-          console.log(`[Feishu] Unsupported message type: ${msgType}, content: ${content ? 'exists' : 'missing'}, userOpenId: ${userOpenId}`)
+          console.log(`[Feishu] ❌ [${msgNum}] Unsupported message type: ${msgType}, content: ${content ? 'exists' : 'missing'}, userOpenId: ${userOpenId}`)
         }
       } catch (error) {
-        console.error('[Feishu] Error processing message:', error)
+        console.error(`[Feishu] ❌ [${msgNum}] Error processing message:`, error)
       }
     }
   })
