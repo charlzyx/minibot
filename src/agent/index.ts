@@ -62,11 +62,17 @@ export class Agent {
       return commandResult
     }
     
-    const config = await this.configManager.loadConfig()
-    console.log('[Agent] Config loaded')
-    
+    // Handle skill-creator flow
     const sessionManager = getSessionManager()
     const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+    const session = sessionManager.getOrCreate(sessionId)
+    
+    if (session.activeSkill === 'skill-creator') {
+      return await this.handleSkillCreator(context, session, sessionManager)
+    }
+    
+    const config = await this.configManager.loadConfig()
+    console.log('[Agent] Config loaded')
     
     const messages = this.buildLLMMessages(context, config)
     console.log('[Agent] Messages built, count:', messages.length)
@@ -191,7 +197,7 @@ export class Agent {
     const sessionId = context.sessionId || `${context.platform}:${context.userId}`
     const session = sessionManager.getOrCreate(sessionId)
     
-    const skillsPrompt = this.skillManager.getSkillsPrompt()
+    const skillsPrompt = ''
     
     let prompt = `You are an AI assistant that helps users solve problems.
 
@@ -237,6 +243,124 @@ IMPORTANT: Provide timely status updates during execution. Report progress and i
   private async updateMemory(context: AgentContext, response: string): Promise<void> {
     await this.memoryManager.store(context.userMessage, ['chat', context.userId, context.platform])
     await this.memoryManager.store(response, ['assistant', context.userId, context.platform])
+  }
+
+  private async handleSkillCreator(context: AgentContext, session: any, sessionManager: any): Promise<string> {
+    const skillCreatorState = session.state?.skillCreator || { step: 1, skillData: {} }
+    const { step, skillData } = skillCreatorState
+    
+    let nextStep = step
+    let response = ''
+    
+    switch (step) {
+      case 1:
+        // 处理技能名称
+        if (context.userMessage.trim()) {
+          skillData.name = context.userMessage.trim()
+          nextStep = 2
+          response = `✅ 技能名称已设置为: ${skillData.name}\n\n` +
+            '现在，请提供技能的描述：'
+        } else {
+          response = '❌ 技能名称不能为空，请重新输入：'
+        }
+        break
+        
+      case 2:
+        // 处理技能描述
+        skillData.description = context.userMessage.trim() || ''
+        nextStep = 3
+        response = `✅ 技能描述已设置\n\n` +
+          '现在，请输入技能的标签（用逗号分隔）：'
+        break
+        
+      case 3:
+        // 处理技能标签
+        const tags = context.userMessage.trim()
+          ? context.userMessage.split(',').map((tag: string) => tag.trim())
+          : []
+        skillData.tags = tags
+        nextStep = 4
+        response = `✅ 技能标签已设置为: ${tags.join(', ')}\n\n` +
+          '现在，请编写技能的实现代码：\n\n' +
+          '技能代码应该导出一个包含 execute 方法的对象，例如：\n\n' +
+          '```javascript\n' +
+          'module.exports = {\n' +
+          '  async execute(context, args) {\n' +
+          '    return "技能执行结果"\n' +
+          '  }\n' +
+          '}\n' +
+          '```\n\n' +
+          '请输入你的技能代码：'
+        break
+        
+      case 4:
+        // 处理技能代码
+        skillData.code = context.userMessage.trim()
+        
+        // 创建技能
+        try {
+          const { getSkillManager } = await import('../skills')
+          const skillManager = getSkillManager()
+          
+          const filePath = await skillManager.createSkill(
+            skillData.name,
+            skillData.code,
+            {
+              name: skillData.name,
+              description: skillData.description,
+              tags: skillData.tags
+            }
+          )
+          
+          // 重置会话状态
+          session.activeSkill = null
+          session.state = {
+            ...session.state,
+            skillCreator: null
+          }
+          await sessionManager.save(session)
+          
+          response = `🎉 **技能创建成功！**\n\n` +
+            `技能名称: ${skillData.name}\n` +
+            `描述: ${skillData.description || '无'}\n` +
+            `标签: ${skillData.tags.join(', ') || '无'}\n` +
+            `文件路径: ${filePath}\n\n` +
+            '你可以使用 `/skills` 命令查看所有可用的技能。'
+        } catch (error) {
+          console.error('[Agent] Failed to create skill:', error)
+          response = `❌ 技能创建失败：${error instanceof Error ? error.message : String(error)}\n\n` +
+            '请重试或联系管理员。'
+        }
+        break
+        
+      default:
+        response = '❌ 技能创建流程出错，请重新开始。'
+        session.activeSkill = null
+        session.state = {
+          ...session.state,
+          skillCreator: null
+        }
+        await sessionManager.save(session)
+        break
+    }
+    
+    // 更新会话状态
+    if (nextStep <= 4) {
+      session.state = {
+        ...session.state,
+        skillCreator: {
+          step: nextStep,
+          skillData
+        }
+      }
+      await sessionManager.save(session)
+    }
+    
+    // 保存消息记录
+    sessionManager.addMessage(context.sessionId || `${context.platform}:${context.userId}`, 'user', context.userMessage)
+    sessionManager.addMessage(context.sessionId || `${context.platform}:${context.userId}`, 'assistant', response)
+    
+    return response
   }
 
   async destroy() {

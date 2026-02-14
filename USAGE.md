@@ -8,28 +8,27 @@ minibot/
 │   ├── agent/              # Agent 核心逻辑
 │   ├── channels/           # 消息通道（飞书、微信等）
 │   ├── commands/           # 命令系统
+│   ├── config/             # 配置管理
+│   ├── container-runner.ts # 容器运行器
 │   ├── cron/               # 定时任务系统
+│   ├── group-queue.ts      # 组队列管理
+│   ├── index.ts            # 主入口文件
+│   ├── logger.ts           # 日志系统
+│   ├── message-processor.ts # 消息处理器
 │   ├── memory/             # 记忆管理
+│   ├── plugins/            # 插件系统
+│   ├── router.ts           # 消息路由器
 │   ├── session/            # 会话管理
 │   ├── skills/             # 技能系统
-│   ├── tools/              # 工具系统
-│   ├── index.ts            # 主入口文件
-│   └── cron-demo.ts       # 定时任务示例
-├── test/                  # 单元测试
-├── tests/                 # 集成测试
-├── $HOME/minibot/         # 工作目录（运行时生成）
-│   ├── sessions/           # 会话存储
-│   ├── memory/             # 记忆存储（Markdown）
-│   ├── db/                # SQLite 数据库
-│   ├── skills/             # 技能文件
-│   ├── workspaces/         # 任务工作区
-│   └── minibot.config.ts  # 配置文件
+│   ├── task-scheduler.ts   # 任务调度器
+│   └── tools/              # 工具系统
+├── docs/                   # 文档目录
+├── nanoclaw/               # NanoClaw 项目
 ├── .env.example          # 环境变量模板
 ├── package.json          # 项目配置
 ├── tsconfig.json        # TypeScript 配置
 ├── README.md            # 项目说明
-├── CRON_README.md      # 定时任务文档
-└── CRON_DEPLOYMENT.md  # 定时任务部署指南
+└── USAGE.md             # 使用指南
 ```
 
 ## 快速开始
@@ -61,20 +60,16 @@ FEISHU_APP_ID=your_feishu_app_id
 FEISHU_APP_SECRET=your_feishu_app_secret
 
 # Server
-PORT=18790
+PORT=18791
 ```
 
 ### 3. 启动服务
 
 ```bash
-# 开发模式（使用默认工作区 $HOME/minibot）
+# 开发模式（使用默认工作区 /tmp/minibot-workspace）
 npm run dev
 
-# 开发模式（使用自定义工作区）
-npm run dev -- --workspace=/path/to/workspace
-
 # 生产模式
-npm run build
 npm start
 
 # 生产模式（使用自定义工作区）
@@ -85,7 +80,7 @@ npm start -- --workspace=/path/to/workspace
 
 访问健康检查接口：
 ```bash
-curl http://localhost:18790/health
+curl http://localhost:18791/health
 ```
 
 ## 核心功能使用
@@ -102,6 +97,7 @@ Minibot 支持斜杠命令来快速执行特定操作。
 | `/reset` | 重置当前会话 | `/reset` |
 | `/skills` | 列出所有可用的技能 | `/skills` |
 | `/status` | 显示系统状态 | `/status` |
+| `/code` | 学习 NanoClaw 并在容器中运行 | `/code [任务描述]` |
 
 #### 使用示例
 
@@ -120,6 +116,9 @@ Minibot 支持斜杠命令来快速执行特定操作。
 
 **/status** - 显示系统状态
   用法: /status
+
+**/code** - 学习 NanoClaw 并在容器中运行
+  用法: /code [任务描述]
 ```
 
 ```
@@ -140,7 +139,92 @@ Minibot 支持斜杠命令来快速执行特定操作。
   标签: code, review, development
 ```
 
-### 2. 技能系统
+```
+用户：/code 学习 NanoClaw 代码并固定在容器中运行
+机器人：🤖 **NanoClaw 学习模式已启动**
+
+任务: 学习 NanoClaw 代码并固定在容器中运行
+
+📚 已找到 6 个重要的 NanoClaw 文件
+
+🚀 正在启动容器...
+
+✅ 容器启动成功！
+
+📦 容器输出: This is a simulated container response
+
+我现在可以帮助你完成以下任务：
+
+- 📝 学习 NanoClaw 代码
+- 🐳 在容器中运行代码
+- 🔧 固定在容器中运行
+
+我会及时反馈执行状态，遇到问题立即通知。
+
+请告诉我你需要什么帮助！
+```
+
+### 2. 容器运行器
+
+容器运行器提供了一个隔离的执行环境，用于安全地运行代理。
+
+#### 功能特性
+
+- 容器系统检查
+- 代理在隔离容器中执行
+- 输出监控
+- IPC 通信
+- 当 Apple Container 系统不可用时，回退到模拟容器执行
+
+#### 使用方式
+
+通过 `/code` 命令使用容器运行器：
+
+```
+/code 学习 NanoClaw 代码并在容器中运行
+```
+
+#### 编程使用
+
+```typescript
+import { runContainerAgent } from './src/container-runner'
+
+const group = {
+  folder: 'nanoclaw',
+  name: 'NanoClaw Container'
+}
+
+const params = {
+  prompt: '学习 NanoClaw 代码并固定在容器中运行',
+  sessionId: 'user:123',
+  groupFolder: 'nanoclaw',
+  chatJid: 'user:123',
+  isMain: true
+}
+
+const onRegisterProcess = (proc, containerName, groupFolder) => {
+  console.log(`[Container] 注册进程: ${containerName}`)
+}
+
+const onOutput = async (output) => {
+  console.log(`[Container] 输出: ${JSON.stringify(output)}`)
+}
+
+const result = await runContainerAgent(
+  group,
+  params,
+  onRegisterProcess,
+  onOutput
+)
+
+if (result.status === 'success') {
+  console.log(`容器启动成功！输出: ${result.result}`)
+} else {
+  console.error(`容器启动失败: ${result.error}`)
+}
+```
+
+### 3. 技能系统
 
 #### 技能文件格式
 
@@ -162,11 +246,11 @@ enabled: true
 
 #### 创建技能
 
-在 `$HOME/minibot/skills/` 目录下创建 `.skill.md` 文件：
+在 `skills/` 目录下创建 `.skill.md` 文件：
 
 ```bash
 # 创建技能文件
-nano $HOME/minibot/skills/my-skill.skill.md
+nano skills/my-skill.skill.md
 ```
 
 示例技能：
@@ -203,7 +287,7 @@ enabled: true
 
 #### 技能自动加载
 
-启动 Minibot 时会自动加载 `$HOME/minibot/skills/` 目录下的所有技能文件。
+启动 Minibot 时会自动加载 `skills/` 目录下的所有技能文件。
 
 #### REST API
 
@@ -229,7 +313,7 @@ POST /api/skills
 DELETE /api/skills/:id
 ```
 
-### 3. 飞书集成
+### 4. 飞书集成
 
 #### 配置
 
@@ -255,7 +339,7 @@ FEISHU_VERIFICATION_TOKEN=     # 可选
 
 启动服务后，飞书机器人会自动连接并接收消息。每个对话都有独立的会话历史。
 
-### 2. 会话管理
+### 5. 会话管理
 
 #### 会话隔离
 
@@ -281,6 +365,12 @@ sessionManager.addMessage('feishu:oc_xxx', 'assistant', '你好！有什么我�
 // 获取消息历史
 const history = sessionManager.getMessages('feishu:oc_xxx', 20)
 
+// 获取指定时间戳后的消息
+const recent = sessionManager.getMessagesSince('feishu:oc_xxx', Date.now() - 3600000)
+
+// 获取最后消息的时间戳
+const lastTimestamp = sessionManager.getLastTimestamp('feishu:oc_xxx')
+
 // 保存会话
 await sessionManager.save(session)
 
@@ -291,7 +381,7 @@ const sessions = await sessionManager.listSessions()
 await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000)
 ```
 
-### 3. 记忆管理
+### 6. 记忆管理
 
 #### 存储策略
 
@@ -344,7 +434,7 @@ await memoryManager.close()
 - 每日笔记：`memory/YYYY-MM-DD.md`
 - 长期记忆：`memory/MEMORY.md`
 
-### 4. 工具系统
+### 7. 工具系统
 
 #### 可用工具
 
@@ -365,7 +455,7 @@ Agent：[调用 file.list 工具]
 Agent：当前目录包含以下文件：...
 ```
 
-### 5. 定时任务
+### 8. 定时任务
 
 #### 快速开始
 
@@ -402,18 +492,6 @@ await scheduler.addJob({
 - `0 9-17 * * 1-5` - 工作日 9-17 点每小时
 - `0 */30 * * * *` - 每 30 秒（6 段式）
 
-#### 运行示例
-
-```bash
-# 构建项目
-npm run build
-
-# 运行定时任务示例
-node dist/cron-demo.js
-```
-
-详细文档：[CRON_README.md](CRON_README.md) | [CRON_DEPLOYMENT.md](CRON_DEPLOYMENT.md)
-
 ## API 接口
 
 ### 健康检查
@@ -427,7 +505,7 @@ GET /health
 {
   "status": "ok",
   "version": "1.0.0",
-  "timestamp": "2026-02-13T00:00:00.000Z"
+  "timestamp": "2026-02-14T00:00:00.000Z"
 }
 ```
 
@@ -438,6 +516,151 @@ GET /api/config
 ```
 
 获取当前配置信息。
+
+```bash
+POST /api/config
+```
+
+更新配置信息。
+
+### 聊天接口
+
+```bash
+POST /api/chat
+```
+
+请求体：
+```json
+{
+  "message": "你好",
+  "userId": "user123",
+  "platform": "web",
+  "history": []
+}
+```
+
+响应：
+```json
+{
+  "response": "你好！有什么我可以帮助你的？",
+  "success": true
+}
+```
+
+### 记忆接口
+
+```bash
+GET /api/memory
+```
+
+获取记忆列表。
+
+```bash
+POST /api/memory
+```
+
+存储新记忆：
+```json
+{
+  "content": "记忆内容",
+  "tags": ["tag1", "tag2"]
+}
+```
+
+```bash
+DELETE /api/memory/:id
+```
+
+删除指定记忆。
+
+### 工具接口
+
+```bash
+GET /api/tools
+```
+
+获取可用工具列表。
+
+```bash
+POST /api/tools/:name
+```
+
+调用指定工具：
+```json
+{
+  "params": {
+    "param1": "value1"
+  }
+}
+```
+
+### 技能接口
+
+```bash
+GET /api/skills
+```
+
+获取技能列表。
+
+```bash
+GET /api/skills/:id
+```
+
+获取指定技能。
+
+```bash
+POST /api/skills
+```
+
+创建新技能：
+```json
+{
+  "name": "技能名称",
+  "content": "技能内容",
+  "metadata": {
+    "description": "技能描述",
+    "tags": ["tag1", "tag2"]
+  }
+}
+```
+
+```bash
+DELETE /api/skills/:id
+```
+
+删除指定技能。
+
+### 插件接口
+
+```bash
+GET /api/plugins
+```
+
+获取插件列表。
+
+```bash
+GET /api/plugins/:id
+```
+
+获取指定插件。
+
+```bash
+POST /api/plugins/:id/config
+```
+
+更新插件配置。
+
+```bash
+POST /api/plugins/:id/enable
+```
+
+启用插件。
+
+```bash
+POST /api/plugins/:id/disable
+```
+
+禁用插件。
 
 ## 开发指南
 
@@ -450,6 +673,17 @@ GET /api/config
 #### src/channels/
 - **feishu.ts**：飞书 WebSocket 实现
 - **DESIGN.md**：通道设计文档
+
+#### src/commands/
+- **default.ts**：默认命令实现
+- **manager.ts**：命令管理器
+- **index.ts**：命令系统入口
+- **DESIGN.md**：命令系统设计文档
+
+#### src/config/
+- **manager.ts**：配置管理器
+- **schema.ts**：配置模式
+- **DESIGN.md**：配置系统设计文档
 
 #### src/cron/
 - **parser.ts**：Cron 表达式解析器
@@ -512,6 +746,25 @@ export const myTool = {
 3. 在 `src/index.ts` 集成通道
 4. 更新 `src/channels/DESIGN.md`
 
+### 添加新命令
+
+1. 在 `src/commands/default.ts` 添加命令定义
+2. 实现命令处理函数
+3. 注册命令到 `defaultCommands` 数组
+
+示例：
+```typescript
+{
+  name: 'mycommand',
+  description: '我的自定义命令',
+  usage: '/mycommand [参数]',
+  handler: async (args, context) => {
+    // 实现命令逻辑
+    return '命令执行成功'
+  }
+}
+```
+
 ## 测试
 
 ### 运行测试
@@ -544,7 +797,7 @@ COPY package*.json ./
 RUN npm ci --only=production
 COPY . .
 RUN npm run build
-EXPOSE 18790
+EXPOSE 18791
 CMD ["npm", "start"]
 ```
 
@@ -614,6 +867,15 @@ chmod 755 sessions/
 chmod 755 memory/ db/
 ```
 
+#### 5. 容器运行失败
+
+检查容器系统是否可用：
+```bash
+container system status
+```
+
+如果容器系统不可用，Minibot 会自动回退到模拟容器执行。
+
 ### 日志查看
 
 ```bash
@@ -643,6 +905,12 @@ const history = sessionManager.getMessages(sessionId, 20)
 - 合理设置任务优先级
 - 配置适当的超时时间
 
+### 4. 容器优化
+
+- 使用真实容器系统获得更好的隔离性
+- 配置容器资源限制
+- 优化容器启动时间
+
 ## 安全建议
 
 1. **环境变量**：不要将 `.env` 文件提交到版本控制
@@ -650,6 +918,7 @@ const history = sessionManager.getMessages(sessionId, 20)
 3. **工作区隔离**：启用工作区隔离限制文件访问
 4. **命令验证**：验证 Shell 命令的安全性
 5. **输入过滤**：过滤恶意输入
+6. **容器隔离**：使用容器运行器隔离执行环境
 
 ## 扩展阅读
 
@@ -659,9 +928,12 @@ const history = sessionManager.getMessages(sessionId, 20)
 - [Tools Design](src/tools/DESIGN.md) - 工具系统
 - [Memory Design](src/memory/DESIGN.md) - 记忆管理
 - [Session Design](src/session/DESIGN.md) - 会话管理
+- [Config Design](src/config/DESIGN.md) - 配置系统
 - [Cron Design](src/cron/DESIGN.md) - 定时任务
-- [Cron README](CRON_README.md) - 定时任务使用指南
-- [Cron Deployment](CRON_DEPLOYMENT.md) - 定时任务部署
+- [Container Runner](src/container-runner.ts) - 容器执行
+- [Group Queue](src/group-queue.ts) - 队列管理
+- [Message Processor](src/message-processor.ts) - 消息处理
+- [Task Scheduler](src/task-scheduler.ts) - 任务管理
 
 ## 贡献
 

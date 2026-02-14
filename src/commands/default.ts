@@ -1,5 +1,6 @@
 import { Command } from './manager'
 import { getSessionManager } from '../session'
+import { ChildProcess } from 'child_process'
 
 export const defaultCommands: Command[] = [
   {
@@ -77,7 +78,7 @@ export const defaultCommands: Command[] = [
   },
   {
     name: 'code',
-    description: '启动 Claude Code 编程助手',
+    description: '学习 NanoClaw 并在容器中运行',
     usage: '/code [任务描述]',
     handler: async (args, context) => {
       const sessionManager = getSessionManager()
@@ -87,22 +88,128 @@ export const defaultCommands: Command[] = [
       session.activeSkill = 'claude-code'
       await sessionManager.save(session)
       
-      let response = '🤖 **Claude Code 助手已启动**\n\n'
+      let response = '🤖 **NanoClaw 学习模式已启动**\n\n'
       
       if (args.length > 0) {
         const task = args.join(' ')
         response += `任务: ${task}\n\n`
       }
       
-      response += `我现在可以帮助你完成以下编程任务：\n\n`
-      response += `- 📝 代码编写\n`
-      response += `- 🐛 代码调试\n`
-      response += `- ♻️ 代码重构\n`
-      response += `- 🔍 代码审查\n\n`
+      // 学习 NanoClaw 代码
+      const nanoclawPath = '/tmp/minibot/nanoclaw'
+      let nanoclawFiles = []
+      
+      try {
+        const fs = require('fs')
+        const path = require('path')
+        
+        // 读取 NanoClaw 的主要文件
+        if (fs.existsSync(nanoclawPath)) {
+          // 只读取重要的文件，而不是所有的文件
+          const importantFiles = [
+            'src/index.ts',
+            'src/group-queue.ts',
+            'src/container-runner.ts',
+            'src/task-scheduler.ts',
+            'src/router.ts',
+            'src/db.ts'
+          ]
+          
+          for (const file of importantFiles) {
+            const fullPath = path.join(nanoclawPath, file)
+            if (fs.existsSync(fullPath)) {
+              nanoclawFiles.push(fullPath)
+            }
+          }
+          
+          response += `📚 已找到 ${nanoclawFiles.length} 个重要的 NanoClaw 文件\n\n`
+        } else {
+          response += `⚠️  未找到 NanoClaw 目录，将使用默认配置\n\n`
+        }
+      } catch (error) {
+        response += `⚠️  读取 NanoClaw 目录时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
+      }
+      
+      // 在容器中运行
+      try {
+        const { runContainerAgent } = await import('../container-runner')
+        
+        const group = {
+          folder: 'nanoclaw',
+          name: 'NanoClaw Container'
+        }
+        
+        const params = {
+          prompt: `学习 NanoClaw 代码并固定在容器中运行。\n\nNanoClaw 文件: ${nanoclawFiles.join(', ')}\n\n任务: ${args.join(' ')}`,
+          sessionId: sessionId,
+          groupFolder: 'nanoclaw',
+          chatJid: sessionId,
+          isMain: true
+        }
+        
+        const onRegisterProcess = (proc: ChildProcess, containerName: string, groupFolder: string) => {
+          console.log(`[Container] 注册进程: ${containerName}`)
+        }
+        
+        const onOutput = async (output: any) => {
+          console.log(`[Container] 输出: ${JSON.stringify(output)}`)
+        }
+        
+        response += `🚀 正在启动容器...\n\n`
+        
+        const result = await runContainerAgent(
+          group,
+          params,
+          onRegisterProcess,
+          onOutput
+        )
+        
+        if (result.status === 'success') {
+          response += `✅ 容器启动成功！\n\n`
+          response += `📦 容器输出: ${result.result}\n\n`
+        } else {
+          response += `❌ 容器启动失败: ${result.error}\n\n`
+        }
+      } catch (error) {
+        response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
+      }
+      
+      response += `我现在可以帮助你完成以下任务：\n\n`
+      response += `- 📝 学习 NanoClaw 代码\n`
+      response += `- 🐳 在容器中运行代码\n`
+      response += `- 🔧 固定在容器中运行\n\n`
       response += `我会及时反馈执行状态，遇到问题立即通知。\n\n`
       response += `请告诉我你需要什么帮助！`
       
       return response
+    }
+  },
+  {
+    name: 'skill-creator',
+    description: '创建自定义技能',
+    usage: '/skill-creator',
+    handler: async (args, context) => {
+      const sessionManager = getSessionManager()
+      const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+      
+      const session = sessionManager.getOrCreate(sessionId)
+      session.activeSkill = 'skill-creator'
+      session.state = {
+        ...session.state,
+        skillCreator: {
+          step: 1,
+          skillData: {}
+        }
+      }
+      await sessionManager.save(session)
+      
+      return '🎨 **技能创建助手已启动**\n\n' +
+        '我将帮助你创建一个自定义技能。请按照以下步骤操作：\n\n' +
+        '1. 首先，告诉我技能的名称\n' +
+        '2. 然后，提供技能的描述\n' +
+        '3. 接着，输入技能的标签（用逗号分隔）\n' +
+        '4. 最后，编写技能的实现代码\n\n' +
+        '现在，请输入技能的名称：'
     }
   }
 ]

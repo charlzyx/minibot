@@ -28,6 +28,7 @@ export interface Session {
   updated_at: number
   metadata: Record<string, any>
   activeSkill?: string
+  state?: Record<string, any>
 }
 
 class SessionManager {
@@ -156,6 +157,25 @@ class SessionManager {
       content: msg.content,
       timestamp: msg.timestamp
     }))
+  }
+
+  getMessagesSince(key: string, timestamp: number): ChatMessage[] {
+    const session = this.getOrCreate(key)
+    const messages = session.messages.filter(msg => msg.timestamp > timestamp)
+    const filtered = messages.filter(msg => msg.role === 'user' || msg.role === 'assistant')
+    return filtered.map(msg => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content,
+      timestamp: msg.timestamp
+    }))
+  }
+
+  getLastTimestamp(key: string): number {
+    const session = this.getOrCreate(key)
+    if (session.messages.length === 0) {
+      return 0
+    }
+    return session.messages[session.messages.length - 1].timestamp
   }
 
   clear(key: string): void {

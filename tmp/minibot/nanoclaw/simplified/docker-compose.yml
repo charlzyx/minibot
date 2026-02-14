@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  nanoclaw:
+    build: .
+    container_name: nanoclaw-agent
+    restart: unless-stopped
+    
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ASSISTANT_NAME=NanoClaw
+      - MODEL=claude-3-5-sonnet-20241022
+      - MAX_TOKENS=4096
+      - NODE_ENV=production
+    
+    # Mount data directory for persistence
+    volumes:
+      - nanoclaw-data:/app/data
+    
+    # Interactive mode for CLI
+    stdin_open: true
+    tty: true
+    
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  nanoclaw-data:
+    driver: local

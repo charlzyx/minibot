@@ -1,0 +1,42 @@
+# NanoClaw 代码学习笔记
+
+## 项目概述
+NanoClaw 是一个轻量级的 Claude AI 助手，运行在 Apple 容器中以保障安全。
+- GitHub: https://github.com/qwibitai/nanoclaw
+- Stars: 8000+ (非常热门)
+- 语言: TypeScript
+- 许可证: MIT
+
+## 技术栈
+- Node.js >= 20
+- TypeScript
+- Better SQLite3 (数据库)
+- Baileys (WhatsApp 集成)
+- Pino (日志)
+- Cron Parser (定时任务)
+- Zod (数据验证)
+
+## 主要功能
+1. 在 Apple 容器中安全运行
+2. 连接 WhatsApp
+3. 内存管理
+4. 定时任务调度
+5. 基于 Anthropic Agents SDK
+
+## 目录结构
+- src/: 主要源代码
+  - index.ts: 主入口
+  - container-runner.ts: 容器运行器
+  - db.ts: 数据库管理
+  - task-scheduler.ts: 任务调度
+  - channels/: 通信渠道
+  - whatsapp-auth.ts: WhatsApp 认证
+  - mount-security.ts: 挂载安全
+  
+- container/: 容器配置
+  - Dockerfile: Docker 镜像
+  - build.sh: 构建脚本
+  - agent-runner/: Agent 运行器
+  - skills/: 技能
+
+## 核心模块

@@ -62,8 +62,8 @@ npm install
 ### 基本使用
 
 ```typescript
-import { CronScheduler } from './cron/scheduler'
-import { ErrorHandler } from './cron/error-handler'
+import { CronScheduler } from './src/cron/scheduler'
+import { ErrorHandler } from './src/cron/error-handler'
 
 // 创建调度器
 const scheduler = new CronScheduler({
@@ -125,6 +125,8 @@ node dist/cron-demo.js
 ### CronParser
 
 ```typescript
+import { CronParser } from './src/cron/parser'
+
 // 解析cron表达式
 const schedule = CronParser.parse('0 2 * * *')
 
@@ -138,6 +140,8 @@ const shouldRun = CronParser.shouldRunNow(schedule)
 ### ShellExecutor
 
 ```typescript
+import { ShellExecutor } from './src/cron/executor'
+
 // 执行命令
 const result = await ShellExecutor.execute({
   command: 'bash',
@@ -162,6 +166,8 @@ const result = await ShellExecutor.executeWithRetry(config, 3, 1000)
 ### WorkspaceManager
 
 ```typescript
+import { WorkspaceManager } from './src/cron/workspace'
+
 // 创建工作区管理器
 const workspaceManager = new WorkspaceManager('./workspaces')
 
@@ -197,6 +203,8 @@ await workspaceManager.deleteWorkspace('my-workspace')
 ### SubagentManager
 
 ```typescript
+import { SubagentManager } from './src/cron/subagent'
+
 // 创建子代理管理器
 const subagentManager = new SubagentManager()
 
@@ -231,6 +239,9 @@ const load = subagentManager.getSystemLoad()
 ### CronScheduler
 
 ```typescript
+import { CronScheduler } from './src/cron/scheduler'
+import { ErrorHandler } from './src/cron/error-handler'
+
 // 创建调度器
 const scheduler = new CronScheduler({
   checkInterval: 1000,
@@ -273,6 +284,8 @@ await scheduler.stop()
 ### ErrorHandler
 
 ```typescript
+import { ErrorHandler } from './src/cron/error-handler'
+
 // 带重试的执行
 const result = await ErrorHandler.executeWithRetry(
   async () => {

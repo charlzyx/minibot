@@ -12,7 +12,12 @@ import { Agent } from './agent'
 import { startFeishuWS, stopFeishuWS, getFeishuChannel, FeishuMessage } from './channels/feishu'
 import { getSessionManager, ChatMessage } from './session'
 import { getSkillManager } from './skills'
+import { getPluginManager } from './plugins'
 import { getCommandManager, defaultCommands } from './commands'
+import { GroupQueue } from './group-queue'
+import { MessageProcessor } from './message-processor'
+import { startSchedulerLoop } from './task-scheduler'
+import { logger } from './logger'
 
 const args = process.argv.slice(2)
 const workspaceArg = args.find(arg => arg.startsWith('--workspace='))
@@ -20,6 +25,11 @@ if (workspaceArg) {
   const workspace = workspaceArg.split('=')[1]
   setCustomWorkspace(workspace)
   console.log(`[Config] Using custom workspace: ${workspace}`)
+} else {
+  // 使用默认的工作目录
+  const defaultWorkspace = '/tmp/minibot-workspace'
+  setCustomWorkspace(defaultWorkspace)
+  console.log(`[Config] Using default workspace: ${defaultWorkspace}`)
 }
 
 const workspace = getWorkspace()
@@ -67,9 +77,46 @@ console.log('[SkillManager] Loading skills...')
 await skillManager.loadAllSkills()
 console.log(`[SkillManager] Loaded ${skillManager.getAllSkills().length} skills`)
 
+const pluginManager = getPluginManager()
+console.log('[PluginManager] Loading plugins...')
+await pluginManager.loadAllPlugins()
+console.log(`[PluginManager] Loaded ${pluginManager.getAllPlugins().length} plugins`)
+
 const commandManager = getCommandManager()
 commandManager.registerMany(defaultCommands)
-console.log(`[CommandManager] Registered ${defaultCommands.length} commands`)
+logger.info(`[CommandManager] Registered ${defaultCommands.length} commands`)
+
+// 初始化 GroupQueue 和 MessageProcessor
+const queue = new GroupQueue()
+const sessions: Record<string, string> = {}
+const registeredGroups: Record<string, any> = {}
+
+const messageProcessor = new MessageProcessor({
+  sendMessage: async (jid, text) => {
+    // 这里需要根据实际的消息发送逻辑实现
+    logger.info({ jid, text: text.substring(0, 100) }, 'Sending message')
+  },
+  registeredGroups: () => registeredGroups,
+  getSessions: () => sessions,
+  queue,
+  onProcess: (groupJid, proc, containerName, groupFolder) => {
+    queue.registerProcess(groupJid, proc, containerName, groupFolder)
+  }
+})
+
+// 初始化任务调度器
+const scheduler = startSchedulerLoop({
+  registeredGroups: () => registeredGroups,
+  getSessions: () => sessions,
+  queue,
+  onProcess: (groupJid, proc, containerName, groupFolder) => {
+    queue.registerProcess(groupJid, proc, containerName, groupFolder)
+  },
+  sendMessage: async (jid, text) => {
+    // 这里需要根据实际的消息发送逻辑实现
+    logger.info({ jid, text: text.substring(0, 100) }, 'Sending message from task scheduler')
+  }
+})
 
 const app = new Hono()
 
@@ -102,10 +149,8 @@ app.post('/api/chat', async (c) => {
   const body = await c.req.json()
   const { message, userId = 'anonymous', platform = 'web', history = [] } = body
   
-  const agent = new Agent()
-  
   try {
-    const response = await agent.process({
+    const response = await messageProcessor.processMessage({
       userMessage: message,
       userId,
       platform,
@@ -115,10 +160,11 @@ app.post('/api/chat', async (c) => {
     })
     
     return c.json({
-      response,
+      response: response || '消息已接收并存储为上下文',
       success: true
     })
   } catch (error) {
+    logger.error({ error }, 'Error processing chat message')
     return c.json({
       response: '抱歉，我遇到了一些问题。',
       success: false,
@@ -264,6 +310,79 @@ app.delete('/api/skills/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// Plugin management endpoints
+app.get('/api/plugins', async (c) => {
+  const { getPluginManager } = await import('./plugins')
+  const pluginManager = getPluginManager()
+  
+  return c.json({
+    plugins: pluginManager.getAllPlugins(),
+    count: pluginManager.getAllPlugins().length
+  })
+})
+
+app.get('/api/plugins/:id', async (c) => {
+  const { id } = c.req.param()
+  const { getPluginManager } = await import('./plugins')
+  const pluginManager = getPluginManager()
+  
+  const plugin = pluginManager.getPlugin(id)
+  
+  if (!plugin) {
+    return c.json({ error: `Plugin ${id} not found` }, 404)
+  }
+  
+  return c.json(plugin)
+})
+
+app.post('/api/plugins/:id/config', async (c) => {
+  const { id } = c.req.param()
+  const body = await c.req.json()
+  const { getPluginManager } = await import('./plugins')
+  const pluginManager = getPluginManager()
+  
+  try {
+    await pluginManager.savePluginConfig(id, body)
+    
+    return c.json({
+      success: true
+    })
+  } catch (error) {
+    return c.json({
+      error: error instanceof Error ? error.message : String(error),
+      success: false
+    }, 500)
+  }
+})
+
+app.post('/api/plugins/:id/enable', async (c) => {
+  const { id } = c.req.param()
+  const { getPluginManager } = await import('./plugins')
+  const pluginManager = getPluginManager()
+  
+  const success = await pluginManager.enablePlugin(id)
+  
+  if (!success) {
+    return c.json({ error: `Plugin ${id} not found` }, 404)
+  }
+  
+  return c.json({ success: true })
+})
+
+app.post('/api/plugins/:id/disable', async (c) => {
+  const { id } = c.req.param()
+  const { getPluginManager } = await import('./plugins')
+  const pluginManager = getPluginManager()
+  
+  const success = await pluginManager.disablePlugin(id)
+  
+  if (!success) {
+    return c.json({ error: `Plugin ${id} not found` }, 404)
+  }
+  
+  return c.json({ success: true })
+})
+
 app.get('/api/chat/stream', async (c) => {
   const { message } = c.req.query()
   const { userId = 'anonymous', platform = 'web' } = c.req.query()
@@ -276,10 +395,8 @@ app.get('/api/chat/stream', async (c) => {
   
   const stream = new ReadableStream({
     async start(controller) {
-      const agent = new Agent()
-      
       try {
-        const response = await agent.process({
+        const response = await messageProcessor.processMessage({
           userMessage: message,
           userId,
           platform,
@@ -289,10 +406,11 @@ app.get('/api/chat/stream', async (c) => {
         })
         
         const encoder = new TextEncoder()
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(response)}\n\n`))
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(response || '消息已接收并存储为上下文')}\n\n`))
         
         controller.close()
       } catch (error) {
+        logger.error({ error }, 'Error processing streaming chat message')
         const encoder = new TextEncoder()
         controller.enqueue(encoder.encode(`event: error\ndata: ${error instanceof Error ? error.message : String(error)}\n\n`))
         controller.close()
@@ -317,15 +435,31 @@ app.onError((err, c) => {
 })
 
 process.on('SIGINT', async () => {
-  console.log('\nShutting down gracefully...')
+  logger.info('Shutting down gracefully...')
   stopFeishuWS()
+  
+  // 关闭插件
+  const pluginManager = getPluginManager()
+  await pluginManager.shutdownAllPlugins()
+  
+  // 关闭消息处理器和队列
+  await messageProcessor.shutdown(10000)
+  
   configManager?.close()
   process.exit(0)
 })
 
 process.on('SIGTERM', async () => {
-  console.log('\nShutting down gracefully...')
+  logger.info('Shutting down gracefully...')
   stopFeishuWS()
+  
+  // 关闭插件
+  const pluginManager = getPluginManager()
+  await pluginManager.shutdownAllPlugins()
+  
+  // 关闭消息处理器和队列
+  await messageProcessor.shutdown(10000)
+  
   configManager?.close()
   process.exit(0)
 })
@@ -375,7 +509,7 @@ async function initializeFeishuWS() {
         
         if (userId && content) {
           try {
-            console.log('[Feishu] Getting Feishu channel...')
+            logger.info('[Feishu] Getting Feishu channel...')
             const feishuChannel = getFeishuChannel({
               appId: feishuConfig.appId,
               appSecret: feishuConfig.appSecret,
@@ -384,10 +518,8 @@ async function initializeFeishuWS() {
               allowFrom: feishuConfig.allowFrom
             })
             
-            console.log('[Feishu] 🤖 Processing with Agent...')
-            const agent = new Agent()
-            console.log('[Feishu] Agent created, starting process...')
-            const response = await agent.process({
+            logger.info('[Feishu] Processing with MessageProcessor...')
+            const response = await messageProcessor.processMessage({
               userMessage: content,
               userId,
               platform: 'feishu',
@@ -397,15 +529,19 @@ async function initializeFeishuWS() {
               metadata: { chatId, chatType }
             })
             
-            console.log('[Feishu] Agent response received:', response.substring(0, 100))
-            console.log('[Feishu] 📤 Sending reply...')
-            await feishuChannel.replyMessage(messageId, response, false)
-            console.log('[Feishu] ✅ Reply sent successfully!')
+            if (response) {
+              logger.info({ message: '[Feishu] Response received:', response: response.substring(0, 100) })
+              logger.info('[Feishu] Sending reply...')
+              await feishuChannel.replyMessage(messageId, response, false)
+              logger.info('[Feishu] Reply sent successfully!')
+            } else {
+              logger.info('[Feishu] Message stored as context, no immediate reply needed')
+            }
           } catch (error) {
-            console.error('[Feishu] ❌ Failed to reply:', error)
+            logger.error({ message: '[Feishu] Failed to reply:', error })
           }
         } else {
-          console.log('[Feishu] Skipping message - userId or content missing:', { userId: !!userId, content: !!content })
+          logger.info({ message: '[Feishu] Skipping message - userId or content missing:', userId: !!userId, content: !!content })
         }
       })
       
@@ -422,8 +558,8 @@ async function initializeFeishuWS() {
   }
 }
 
-const port = process.env.PORT || 18790
-console.log(`🚀 Minibot server starting on port ${port}`)
+const port = process.env.PORT || 18791
+logger.info(`🚀 Minibot server starting on port ${port}`)
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   serve({ 

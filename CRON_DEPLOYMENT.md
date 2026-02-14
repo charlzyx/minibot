@@ -53,7 +53,7 @@ npm install
 ```env
 # 基础配置
 NODE_ENV=production
-PORT=18790
+PORT=18791
 
 # 工作区配置
 WORKSPACE_BASE_PATH=./workspaces
@@ -116,8 +116,8 @@ chmod +x scripts/*.sh
 ### 基本使用
 
 ```typescript
-import { CronScheduler } from './cron/scheduler'
-import { ErrorHandler } from './cron/error-handler'
+import { CronScheduler } from './src/cron/scheduler'
+import { ErrorHandler } from './src/cron/error-handler'
 
 // 创建调度器
 const scheduler = new CronScheduler({
@@ -188,7 +188,7 @@ scheduler.on('job:failed', (job, error) => {
 ### 工作区配置
 
 ```typescript
-import { WorkspaceManager } from './cron/workspace'
+import { WorkspaceManager } from './src/cron/workspace'
 
 const workspaceManager = new WorkspaceManager('./workspaces')
 
@@ -218,7 +218,7 @@ const result = await workspaceManager.executeInWorkspace(
 ### 子代理管理
 
 ```typescript
-import { SubagentManager } from './cron/subagent'
+import { SubagentManager } from './src/cron/subagent'
 
 const subagentManager = new SubagentManager()
 
@@ -283,7 +283,7 @@ services:
   cron-scheduler:
     build: .
     ports:
-      - "18790:18790"
+      - "18791:18791"
     volumes:
       - ./workspaces:/app/workspaces
       - ./logs:/app/logs

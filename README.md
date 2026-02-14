@@ -2,7 +2,7 @@
 
 > 🐈 Minimal AI assistant powered by Hono + TypeScript + Node
 
-Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with modern tech stack.
+Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with modern tech stack and enhanced with containerization capabilities.
 
 ## ✨ Features
 
@@ -16,6 +16,8 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 - ⏰ **Scheduled Tasks** - Cron-based task execution with workspace isolation
 - 🤖 **Subagent Architecture** - Distributed task execution and load balancing
 - 🔍 **Error Handling** - Intelligent error classification and retry mechanisms
+- 🐳 **Containerization** - Run agents in isolated containers for security and resource management
+- 📚 **NanoClaw Integration** - Learn and run NanoClaw in containers
 
 ## 🏗️ Architecture
 
@@ -30,6 +32,7 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 │              Hono Server (API)            │
 │         /api/health  /api/chat           │
 │         /api/memory  /api/tools           │
+│         /api/skills  /api/plugins         │
 └────────────────────────────────────────────────┘
                       │
                       ↓
@@ -53,6 +56,12 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 │              Memory & Storage              │
 │              SQLite / Config                │
 └────────────────────────────────────────────────┘
+                      │
+                      ↓
+┌────────────────────────────────────────────────┐
+│           Container Runner                 │
+│      Isolated agent execution             │
+└────────────────────────────────────────────────┘
 ```
 
 ## 📁 Project Structure
@@ -62,25 +71,27 @@ minibot/
 ├── src/                    # 源代码目录
 │   ├── agent/              # Agent 核心逻辑
 │   ├── channels/           # 消息通道（飞书、微信等）
+│   ├── commands/           # 命令系统
+│   ├── config/             # 配置管理
+│   ├── container-runner.ts # 容器运行器
 │   ├── cron/               # 定时任务系统
-│   ├── memory/             # 记忆管理
-│   ├── session/            # 会话管理
-│   ├── tools/              # 工具系统
+│   ├── group-queue.ts      # 组队列管理
 │   ├── index.ts            # 主入口文件
-│   └── cron-demo.ts       # 定时任务示例
-├── test/                  # 单元测试
-├── tests/                 # 集成测试
-├── $HOME/minibot/         # 工作目录（运行时生成）
-│   ├── sessions/           # 会话存储
-│   ├── memory/             # 记忆存储（Markdown）
-│   ├── db/                # SQLite 数据库
-│   ├── minibot.config.ts   # 配置文件
-│   └── workspaces/         # 任务工作区
+│   ├── logger.ts           # 日志系统
+│   ├── message-processor.ts # 消息处理器
+│   ├── memory/             # 记忆管理
+│   ├── plugins/            # 插件系统
+│   ├── router.ts           # 消息路由器
+│   ├── session/            # 会话管理
+│   ├── skills/             # 技能系统
+│   ├── task-scheduler.ts   # 任务调度器
+│   └── tools/              # 工具系统
+├── docs/                   # 文档目录
+├── nanoclaw/               # NanoClaw 项目
 ├── package.json          # 项目配置
 ├── tsconfig.json        # TypeScript 配置
 ├── README.md            # 项目说明
-├── CRON_README.md      # 定时任务文档
-└── CRON_DEPLOYMENT.md    # 定时任务部署指南
+└── USAGE.md             # 使用指南
 ```
 
 ## 🚀 Quick Start
@@ -107,7 +118,7 @@ FEISHU_APP_ID=your_app_id
 FEISHU_APP_SECRET=your_app_secret
 
 # Server
-PORT=18790
+PORT=18791
 ```
 
 ### Development
@@ -116,29 +127,22 @@ PORT=18790
 # Install dependencies
 npm install
 
-# Run dev server (default workspace: $HOME/minibot)
+# Run dev server (default workspace: /tmp/minibot-workspace)
 npm run dev
-
-# Run dev server with custom workspace
-npm run dev -- --workspace=/path/to/workspace
 
 # Build
 npm run build
 
 # Run production server
-npm run start
+npm start
 
 # Run production server with custom workspace
 npm start -- --workspace=/path/to/workspace
-
-# Run cron demo
-npm run build
-node dist/cron-demo.js
 ```
 
 ### Workspace
 
-By default, minibot uses `$HOME/minibot` as the workspace directory. You can specify a custom workspace using the `--workspace` parameter:
+By default, minibot uses `/tmp/minibot-workspace` as the workspace directory. You can specify a custom workspace using the `--workspace` parameter:
 
 ```bash
 npm run dev -- --workspace=/custom/path/to/workspace
@@ -149,6 +153,8 @@ The workspace contains:
 - `memory/` - Memory files (Markdown)
 - `db/` - SQLite database
 - `workspaces/` - Task workspaces
+- `skills/` - Skill files
+- `ipc/` - Inter-process communication files
 - `minibot.config.ts` - Configuration file
 
 This allows you to run multiple instances of minibot with different workspaces.
@@ -166,6 +172,58 @@ The Agent is the core intelligence unit that processes user messages, calls tool
 - Response generation
 
 **Documentation**: [Agent Design](src/agent/DESIGN.md)
+
+### Container Runner
+
+Container Runner module provides isolated execution environment for agents.
+
+**Features**:
+- Container system checking
+- Agent execution in isolated containers
+- Output monitoring
+- IPC communication
+- Fallback to simulated container execution
+
+**Documentation**: [Container Runner Design](src/container-runner.ts)
+
+### Group Queue
+
+Group Queue module manages concurrent container execution with queue system.
+
+**Features**:
+- Concurrency control
+- State management
+- Message queueing
+- Retry mechanisms
+- Process registration
+
+**Documentation**: [Group Queue Design](src/group-queue.ts)
+
+### Message Processor
+
+Message Processor module handles message processing with context accumulation.
+
+**Features**:
+- Context accumulation
+- Trigger pattern detection
+- Message formatting
+- Response generation
+- Session management
+
+**Documentation**: [Message Processor Design](src/message-processor.ts)
+
+### Task Scheduler
+
+Task Scheduler module manages scheduled tasks with cron expressions.
+
+**Features**:
+- Cron expression parsing
+- Task management
+- Workspace isolation
+- Error handling
+- Retry mechanisms
+
+**Documentation**: [Task Scheduler Design](src/task-scheduler.ts)
 
 ### Channels
 
@@ -220,6 +278,7 @@ Session module provides conversation history management with isolation.
 - Automatic session cleanup
 - Support for group and private chats
 - Configurable message history limit
+- Context accumulation
 
 **Documentation**: [Session Design](src/session/DESIGN.md)
 
@@ -229,7 +288,7 @@ Commands module provides a command system for quick operations.
 
 **Features**:
 - Slash command support (`/command`)
-- Built-in commands: `/help`, `/reset`, `/skills`, `/status`
+- Built-in commands: `/help`, `/reset`, `/skills`, `/status`, `/code`
 - Extensible command registration
 - Command help generation
 - Error handling
@@ -242,7 +301,7 @@ Skills module provides a Markdown-based skill system inspired by nanobot.
 
 **Features**:
 - Markdown skill files with YAML frontmatter
-- Automatic skill loading from `$HOME/minibot/skills/`
+- Automatic skill loading from `skills/` directory
 - Skill injection into agent's system prompt
 - Skill categorization with tags
 - REST API for skill management
@@ -274,7 +333,7 @@ Cron module provides a complete scheduled task system.
 - Error handling and retry mechanisms
 - Task priority management
 
-**Documentation**: [Cron Design](src/cron/DESIGN.md) | [Cron README](CRON_README.md) | [Cron Deployment](CRON_DEPLOYMENT.md)
+**Documentation**: [Cron Design](src/cron/DESIGN.md)
 
 ## 📱 Feishu Integration
 
@@ -341,8 +400,6 @@ await scheduler.addJob({
 - `0 9-17 * * 1-5` - Weekdays 9 AM - 5 PM hourly
 - `0 */30 * * * *` - Every 30 seconds (6-segment)
 
-For more details, see [Cron README](CRON_README.md)
-
 ## 🗂️ Session Management
 
 ### Quick Start
@@ -361,6 +418,12 @@ sessionManager.addMessage('feishu:oc_xxx', 'assistant', '你好！有什么我�
 
 // Get message history
 const history = sessionManager.getMessages('feishu:oc_xxx', 20)
+
+// Get messages since timestamp
+const recent = sessionManager.getMessagesSince('feishu:oc_xxx', Date.now() - 3600000)
+
+// Get last timestamp
+const lastTimestamp = sessionManager.getLastTimestamp('feishu:oc_xxx')
 
 // Save session
 await sessionManager.save(session)
@@ -431,7 +494,7 @@ FEISHU_APP_ID=your_app_id
 FEISHU_APP_SECRET=your_app_secret
 
 # Server
-PORT=18790
+PORT=18791
 NODE_ENV=development
 ```
 
@@ -454,17 +517,60 @@ interface Config {
       enabled: boolean
       appId: string
       appSecret: string
+      encryptKey: string
+      verificationToken: string
+      allowFrom: string[]
+    }
+    wechat: {
+      enabled: boolean
+      appId: string
+      appSecret: string
+    }
+    dingtalk: {
+      enabled: boolean
+      clientId: string
+      clientSecret: string
+      allowFrom: string[]
+    }
+    qq: {
+      enabled: boolean
+      appId: string
+      secret: string
+      allowFrom: string[]
+    }
+    discord: {
+      enabled: boolean
+      botToken: string
+      appToken: string
+      groupPolicy: string
+    }
+    slack: {
+      enabled: boolean
+      botToken: string
+      appToken: string
+      groupPolicy: string
     }
   }
   tools: {
-    file: { enabled: boolean }
-    shell: { enabled: boolean }
-    web: { enabled: boolean }
-    llm: { enabled: boolean }
+    shell: {
+      enabled: boolean
+    }
+    web: {
+      enabled: boolean
+    }
+    file: {
+      enabled: boolean
+      workspace: string
+    }
+    llm: {
+      enabled: boolean
+    }
+    memory: {
+      enabled: boolean
+    }
   }
-  server: {
-    port: number
-    cors: boolean
+  security: {
+    restrictToWorkspace: boolean
   }
 }
 ```
@@ -476,6 +582,7 @@ interface Config {
 - **API Key Protection** - Environment variable storage
 - **Content Filtering** - Input validation on all incoming messages
 - **Message Deduplication** - Prevent duplicate message processing
+- **Container Isolation** - Agent execution in isolated containers
 
 ## 📊 Performance
 
@@ -484,6 +591,7 @@ interface Config {
 - **SQLite Memory** - Efficient persistent storage
 - **Lazy Loading** - Modules loaded on demand
 - **Connection Pooling** - Efficient channel management
+- **Containerization** - Isolated execution for better resource management
 
 ## 🤝 Contributing
 
@@ -503,24 +611,9 @@ MIT
 
 Inspired by:
 - [nanobot](https://github.com/hkuds/nanobot) - The original lightweight AI assistant
+- [nanoclaw](https://github.com/gavrielc/nanoclaw) - Lightweight, secure AI assistant
 - [OpenClaw](https://github.com/openclaw/openclaw) - The OpenAI agent platform
 - [Hono](https://github.com/honojs/hono) - The ultra-fast web framework
-
-## 📞 Comparison: nanobot vs minibot
-
-| Feature | nanobot | minibot |
-|---------|----------|----------|
-| Language | Python | TypeScript |
-| Framework | Custom | Hono |
-| Memory | Text files (JSONL) | SQLite + Markdown |
-| Session | JSONL files | JSONL files + Cache |
-| Type Safety | Dynamic | Static (TS) |
-| Performance | Excellent | Excellent |
-| Cron System | ✅ | ✅ (Enhanced) |
-| Workspace Isolation | ✅ | ✅ |
-| Subagent Architecture | ✅ | ✅ |
-| Reply Reference | ❌ | ✅ |
-| Learning Curve | Medium | Low |
 
 ## 📚 Documentation
 
@@ -531,8 +624,10 @@ Inspired by:
 - [Session Design](src/session/DESIGN.md) - Session management
 - [Config Design](src/config/DESIGN.md) - Configuration system
 - [Cron Design](src/cron/DESIGN.md) - Scheduled task system
-- [Cron README](CRON_README.md) - Cron system user guide
-- [Cron Deployment](CRON_DEPLOYMENT.md) - Cron deployment instructions
+- [Container Runner](src/container-runner.ts) - Container execution
+- [Group Queue](src/group-queue.ts) - Queue management
+- [Message Processor](src/message-processor.ts) - Message handling
+- [Task Scheduler](src/task-scheduler.ts) - Task management
 
 ---
 
