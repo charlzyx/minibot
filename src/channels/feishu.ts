@@ -302,16 +302,18 @@ export function startFeishuWS(
 
   eventDispatcher.register({
     'im.message.receive_v1': async (data: any) => {
+      let msgNum = 0
       try {
         messageCounter++
-        const msgNum = messageCounter
-        console.log(`[Feishu] 🔔 [${msgNum}] Event received: im.message.receive_v1`)
-        console.log(`[Feishu] 🔔 [${msgNum}] Event data:`, {
-          messageId: data?.message?.message_id,
-          timestamp: new Date().toISOString(),
-          eventType: data?.header?.event_type,
-          fullData: JSON.stringify(data).substring(0, 500)
-        })
+        msgNum = messageCounter
+        console.log(`[Feishu] 🔔 [${msgNum}] ========== RAW EVENT RECEIVED ==========`)
+        console.log(`[Feishu] 🔔 [${msgNum}] Event type: im.message.receive_v1`)
+        console.log(`[Feishu] 🔔 [${msgNum}] Full event data:`, JSON.stringify(data, null, 2))
+        console.log(`[Feishu] 🔔 [${msgNum}] Event header:`, data?.header)
+        console.log(`[Feishu] 🔔 [${msgNum}] Event message:`, data?.message)
+        console.log(`[Feishu] 🔔 [${msgNum}] Event sender:`, data?.sender)
+        console.log(`[Feishu] 🔔 [${msgNum}] Event timestamp:`, new Date().toISOString())
+        console.log(`[Feishu] 🔔 [${msgNum}] ==========================================`)
 
         const message = data.message
         if (!message) {
@@ -380,9 +382,9 @@ export function startFeishuWS(
               
               const replyTo = chatType === 'group' ? chatId : userOpenId
               
-              console.log(`[Feishu] 🚀 [${msgNum}] Adding READ reaction for:`, messageId)
-              await feishuChannel.addReaction(messageId, 'EYES')
-              console.log(`[Feishu] ✅ [${msgNum}] Added READ reaction for:`, messageId)
+              console.log(`[Feishu] 🚀 [${msgNum}] Adding GET reaction for:`, messageId)
+              await feishuChannel.addReaction(messageId, 'GET')
+              console.log(`[Feishu] ✅ [${msgNum}] Added GET reaction for:`, messageId)
               
               const feishuMessage: FeishuMessage = {
                 message_id: messageId,
@@ -413,7 +415,7 @@ export function startFeishuWS(
                 console.log(`[Feishu] 📋 [${msgNum}] Message added to pending queue, new size:`, pendingMessages.length)
                 
                 console.log(`[Feishu] 🚀 [${msgNum}] Adding WAITING reaction for:`, messageId)
-                await feishuChannel.addReaction(messageId, 'THUMBSUP')
+                await feishuChannel.addReaction(messageId, 'CLOCK')
                 console.log(`[Feishu] ✅ [${msgNum}] Added WAITING reaction for:`, messageId)
               } else {
                 messageQueue.push(task)
@@ -443,6 +445,10 @@ export function startFeishuWS(
     appSecret: config.appSecret,
     loggerLevel: lark.LoggerLevel.debug,
   })
+
+  console.log('[Feishu] 🔌 WebSocket client created, appId:', config.appId)
+  console.log('[Feishu] 🔌 Starting WebSocket connection...')
+  console.log('[Feishu] 🔌 Logger level: debug')
 
   wsClient.start({
     eventDispatcher
