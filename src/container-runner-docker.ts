@@ -1,6 +1,11 @@
 /**
  * Docker Container Runner
  * 真正的容器隔离实现，每个 /code 命令都在独立的容器中运行
+ *
+ * Inspired by nanoclaw's container implementation:
+ * - Sentinel markers for output parsing
+ * - Real-time stdout monitoring
+ * - Proper agent-runner inside containers
  */
 
 import { spawn, ChildProcess } from 'child_process'
@@ -11,11 +16,16 @@ import { createLogger } from './utils'
 
 const logger = createLogger('DockerContainer')
 
+// Sentinel markers for output parsing (inspired by nanoclaw)
+const OUTPUT_START_MARKER = '---MINIBOT_OUTPUT_START---'
+const OUTPUT_END_MARKER = '---MINIBOT_OUTPUT_END---'
+
 interface ContainerOutput {
   status: 'success' | 'error'
   result?: string
   error?: string
   containerId?: string
+  newSessionId?: string
 }
 
 interface ContainerOptions {
@@ -85,6 +95,7 @@ export class DockerContainerRunner {
   /**
    * 运行代码助手容器
    * 每次调用都会创建一个全新的独立容器
+   * 使用 stdout 监控和 sentinel markers 解析输出
    */
   async runCodeAssistant(options: RunContainerOptions): Promise<ContainerOutput> {
     const { groupFolder, prompt, sessionId, chatJid, containerOptions = {} } = options
@@ -120,19 +131,29 @@ export class DockerContainerRunner {
       workingDir: config.workingDir
     })
 
+    let containerId = ''
+    let containerProc: ChildProcess | null = null
+
     try {
       // 拉取镜像（如果不存在）
       await this.ensureImageExists(config.image)
 
-      // 启动容器
-      const containerId = await this.createAndStartContainer(config)
+      // 启动容器（返回进程用于 stdout 监控）
+      const result = await this.createAndStartContainer(config)
+      containerId = result.containerId
+      containerProc = result.process
+
       logger.info('Container started', { containerId, containerName })
 
-      // 等待容器完成
-      const result = await this.waitForContainer(containerId, outputDataDir, containerOptions?.timeout || 60000)
+      // 等待容器完成（监控 stdout）
+      const output = await this.waitForContainer(
+        containerProc,
+        containerId,
+        containerOptions?.timeout || 60000
+      )
 
-      logger.info('Container finished', { containerId, status: result.status })
-      return result
+      logger.info('Container finished', { containerId, status: output.status })
+      return output
     } catch (error) {
       logger.error('Container execution failed', error, { containerName })
       return {
@@ -141,7 +162,9 @@ export class DockerContainerRunner {
       }
     } finally {
       // 清理容器
-      await this.cleanupContainer(containerName)
+      if (containerId) {
+        await this.cleanupContainer(containerId)
+      }
     }
   }
 
@@ -150,9 +173,9 @@ export class DockerContainerRunner {
    */
   private buildDockerConfig(
     containerName: string,
-    workspaceDir: string,
+    _workspaceDir: string,
     inputDataDir: string,
-    outputDataDir: string,
+    _outputDataDir: string,
     options: ContainerOptions
   ): DockerContainerConfig {
     const imageName = options.imageName || this.DEFAULT_IMAGE
@@ -161,7 +184,7 @@ export class DockerContainerRunner {
 
     // 准备容器内的代码执行脚本
     const scriptPath = path.join(inputDataDir, 'script.js')
-    fs.writeFileSync(scriptPath, this.generateContainerScript(inputDataDir, outputDataDir))
+    fs.writeFileSync(scriptPath, this.generateContainerScript())
 
     return {
       name: containerName,
@@ -170,13 +193,11 @@ export class DockerContainerRunner {
       workingDir: '/workspace',
       env: {
         NODE_ENV: 'production',
-        TASK: JSON.stringify({ prompt: options.prompt }),
-        SESSION_ID: options.sessionId || '',
-        CHAT_JID: options.chatJid || ''
+        MINIBOT_CONTAINER: 'true',
+        CONTAINER_NAME: containerName
       },
       binds: [
-        `${inputDataDir}:/workspace/input:ro`,
-        `${outputDataDir}:/workspace/output:rw`
+        { source: inputDataDir, target: '/workspace/input:ro' }
       ],
       autoRemove: true,
       networkDisabled: options.networkMode !== 'host',
@@ -188,30 +209,75 @@ export class DockerContainerRunner {
 
   /**
    * 生成容器内执行脚本
+   * 使用 stdout 输出和 sentinel markers（参考 nanoclaw）
    */
-  private generateContainerScript(inputDir: string, outputDir: string): string {
+  private generateContainerScript(): string {
     return `
 const fs = require('fs');
 const path = require('path');
 
-// 读取任务
-const inputFile = path.join('/workspace/input', 'task.json');
-const input = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
+// Sentinel markers for output parsing
+const OUTPUT_START_MARKER = '${OUTPUT_START_MARKER}';
+const OUTPUT_END_MARKER = '${OUTPUT_END_MARKER}';
 
-console.log('Task:', input.prompt.substring(0, 100));
+function log(message) {
+  console.error('[agent-runner] ' + message);
+}
 
-// 模拟代码助手处理
-const result = {
-  status: 'success',
-  result: 'Here is your code assistant response for: ' + input.prompt,
-  timestamp: new Date().toISOString()
-};
+function writeOutput(output) {
+  console.log(OUTPUT_START_MARKER);
+  console.log(JSON.stringify(output));
+  console.log(OUTPUT_END_MARKER);
+}
 
-// 写入输出
-const outputFile = path.join('/workspace/output', 'result.json');
-fs.writeFileSync(outputFile, JSON.stringify(result, null, 2));
+async function main() {
+  let input;
 
-console.log('Task completed');
+  try {
+    // 读取任务
+    const inputFile = path.join('/workspace/input', 'task.json');
+    const inputContent = fs.readFileSync(inputFile, 'utf8');
+    input = JSON.parse(inputContent);
+    log('Received prompt: ' + input.prompt.substring(0, 100));
+  } catch (err) {
+    writeOutput({
+      status: 'error',
+      error: 'Failed to read input: ' + (err?.message || String(err))
+    });
+    process.exit(1);
+  }
+
+  try {
+    // TODO: 这里可以集成实际的 LLM 调用或 Claude Agent SDK
+    // 目前使用简单的响应作为示例
+    const result = 'Code assistant response for: ' + input.prompt;
+
+    log('Task completed successfully');
+    writeOutput({
+      status: 'success',
+      result: result,
+      newSessionId: 'session-' + Date.now()
+    });
+  } catch (err) {
+    const errorMessage = err?.message || String(err);
+    log('Task error: ' + errorMessage);
+    writeOutput({
+      status: 'error',
+      error: errorMessage,
+      newSessionId: input.sessionId
+    });
+    process.exit(1);
+  }
+}
+
+main().catch(err => {
+  log('Fatal error: ' + (err?.message || String(err)));
+  writeOutput({
+    status: 'error',
+    error: 'Fatal error: ' + (err?.message || String(err))
+  });
+  process.exit(1);
+});
 `
   }
 
@@ -246,41 +312,43 @@ console.log('Task completed');
 
   /**
    * 创建并启动容器
+   * 返回容器 ID 和进程（用于 stdout 监控）
    */
-  private async createAndStartContainer(config: DockerContainerConfig): Promise<string> {
+  private async createAndStartContainer(config: DockerContainerConfig): Promise<{ containerId: string; process: ChildProcess }> {
     return new Promise((resolve, reject) => {
-      const docker = spawn('docker', ['create', this.buildDockerCreateArgs(config)], { stdio: 'pipe' })
+      const docker = spawn('docker', ['create', ...this.buildDockerCreateArgs(config)], { stdio: 'pipe' })
 
       let output = ''
       let errorOutput = ''
 
-      docker.stdout.on('data', (data) => { output += data.toString() })
-      docker.stderr.on('data', (data) => { errorOutput += data.toString() })
+      docker.stdout?.on('data', (data) => { output += data.toString() })
+      docker.stderr?.on('data', (data) => { errorOutput += data.toString() })
 
       docker.on('close', (code) => {
         if (code !== 0) {
           logger.error('Docker create failed', { code, output, error: errorOutput })
-          reject(new Error(\`Docker create failed: \${errorOutput}\`))
+          reject(new Error(`Docker create failed: ${errorOutput}`))
           return
         }
 
         const containerId = output.trim()
         logger.debug('Container created', { containerId })
 
-        // 启动容器
-        const startDocker = spawn('docker', ['start', containerId], { stdio: 'pipe' })
+        // 启动容器并附加 stdout 以获取实时输出
+        const startDocker = spawn('docker', ['start', '-a', containerId], { stdio: 'pipe' })
 
         startDocker.on('close', (startCode) => {
           if (startCode !== 0) {
-            reject(new Error(\`Docker start failed: \${containerId}\`))
-          } else {
-            resolve(containerId)
+            logger.warn('Docker start exited with non-zero code', { containerId, code: startCode })
           }
         })
 
         startDocker.on('error', (error) => {
           reject(error)
         })
+
+        // 立即返回，让调用方监控输出
+        resolve({ containerId, process: startDocker })
       })
 
       docker.on('error', (error) => {
@@ -291,65 +359,95 @@ console.log('Task completed');
 
   /**
    * 等待容器完成执行
+   * 使用 stdout 监控和 sentinel markers 解析输出（参考 nanoclaw）
    */
   private async waitForContainer(
+    containerProc: ChildProcess,
     containerId: string,
-    outputDir: string,
     timeout: number
   ): Promise<ContainerOutput> {
     return new Promise((resolve) => {
-      const outputFile = path.join(outputDir, 'result.json')
-      let attempts = 0
-      const maxAttempts = Math.ceil(timeout / 500)
+      let stdout = ''
+      let stderr = ''
+      let timeoutHandle: NodeJS.Timeout | null = null
+      let resolved = false
 
-      const checkInterval = setInterval(() => {
-        if (fs.existsSync(outputFile)) {
-          clearInterval(checkInterval)
+      const doResolve = (output: ContainerOutput) => {
+        if (resolved) return
+        resolved = true
+        if (timeoutHandle) clearTimeout(timeoutHandle)
+        resolve(output)
+      }
+
+      // 设置超时
+      timeoutHandle = setTimeout(() => {
+        logger.warn('Container execution timeout', { containerId, timeout })
+        containerProc.kill()
+        doResolve({
+          status: 'error',
+          error: 'Container execution timeout'
+        })
+      }, timeout)
+
+      // 收集 stdout
+      containerProc.stdout?.on('data', (data) => {
+        stdout += data.toString()
+
+        // 检查是否包含完整的输出标记
+        const startIndex = stdout.indexOf(OUTPUT_START_MARKER)
+        const endIndex = stdout.indexOf(OUTPUT_END_MARKER)
+
+        if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+          // 提取标记之间的 JSON
+          const jsonStart = startIndex + OUTPUT_START_MARKER.length
+          const jsonStr = stdout.substring(jsonStart, endIndex).trim()
+
           try {
-            const content = fs.readFileSync(outputFile, 'utf8')
-            const result = JSON.parse(content) as ContainerOutput
-            resolve(result)
+            const output = JSON.parse(jsonStr) as ContainerOutput
+            logger.info('Container output parsed successfully', { containerId, status: output.status })
+            doResolve(output)
           } catch (error) {
-            resolve({
+            logger.error('Failed to parse container output', { error, jsonStr })
+            doResolve({
               status: 'error',
-              error: \`Failed to parse output: \${error}\`
+              error: `Failed to parse output: \${error}`
             })
           }
         }
+      })
 
-        attempts++
-        if (attempts >= maxAttempts) {
-          clearInterval(checkInterval)
-          resolve({
+      // 收集 stderr（用于调试）
+      containerProc.stderr?.on('data', (data) => {
+        stderr += data.toString()
+        logger.debug('Container stderr', { containerId, message: data.toString() })
+      })
+
+      // 监控进程退出
+      containerProc.on('close', (code) => {
+        if (!resolved) {
+          logger.info('Container process closed', { containerId, exitCode: code })
+
+          // 如果已经通过 stdout 解析了输出，就不需要再处理
+          if (stdout.includes(OUTPUT_START_MARKER) && stdout.includes(OUTPUT_END_MARKER)) {
+            return
+          }
+
+          // 否则返回错误
+          doResolve({
             status: 'error',
-            error: 'Container execution timeout'
+            error: `Container exited with code \${code} without producing output`
           })
         }
-      }, 500)
-
-      // 监控容器状态
-      this.monitorContainerStatus(containerId).catch(() => {
-        // 容器可能已经正常结束
       })
-    })
-  }
 
-  /**
-   * 监控容器状态
-   */
-  private async monitorContainerStatus(containerId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const docker = spawn('docker', ['wait', containerId], { stdio: 'pipe' })
-
-      docker.on('close', (code) => {
-        if (code !== 0 && code !== 127) {
-          logger.warn('Container exited with non-zero code', { containerId, code })
+      containerProc.on('error', (error) => {
+        if (!resolved) {
+          logger.error('Container process error', { containerId, error })
+          doResolve({
+            status: 'error',
+            error: `Container process error: \${error.message}`
+          })
         }
-        resolve()
-      })
-
-      docker.on('error', (error) => {
-        reject(error)
       })
     })
   }
@@ -396,7 +494,7 @@ console.log('Task completed');
 
     // 挂载卷
     for (const bind of config.binds) {
-      args.push('--mount', \`type=bind,source=\${bind.source},target=\${bind.target}\${bind.source.endsWith(':ro') ? ',readonly' : ''}\`)
+      args.push('--mount', `type=bind,source=${bind.source},target=${bind.target}${bind.source.endsWith(':ro') ? ',readonly' : ''}`)
     }
 
     // 工作目录
@@ -404,7 +502,7 @@ console.log('Task completed');
 
     // 环境变量
     for (const [key, value] of Object.entries(config.env)) {
-      args.push('-e', \`\${key}=\${value}\`)
+      args.push('-e', `${key}=${value}`)
     }
 
     // 镜像和命令
@@ -432,7 +530,7 @@ console.log('Task completed');
             resolve(JSON.parse(output))
           } catch {
             resolve({})
-          })
+          }
         } else {
           resolve({})
         }
@@ -456,7 +554,7 @@ console.log('Task completed');
 
       docker.on('close', (code) => {
         if (code === 0) {
-          const containers = output.trim().split('\\n').filter(Boolean)
+          const containers = output.trim().split('\n').filter(Boolean)
           resolve(containers)
         } else {
           resolve([])
@@ -495,7 +593,7 @@ console.log('Task completed');
           logger.info('Container force stopped', { container: containerIdOrName })
           resolve()
         } else {
-          reject(new Error(\`Failed to stop container: \${containerIdOrName}\`))
+          reject(new Error(`Failed to stop container: ${containerIdOrName}`))
         }
       })
 
@@ -513,7 +611,6 @@ export interface RunCodeAssistantOptions {
   sessionId?: string
   chatJid?: string
   containerOptions?: ContainerOptions
-  onRegisterProcess?: (containerId: string, containerName: string) => void
   onOutput?: (output: ContainerOutput) => Promise<void>
 }
 
@@ -523,20 +620,11 @@ export async function runCodeAssistant(options: RunCodeAssistantOptions): Promis
     sessionId,
     chatJid,
     containerOptions = {},
-    onRegisterProcess,
     onOutput
   } = options
 
   const runner = new DockerContainerRunner()
-  const groupFolder = \`code-\${Date.now()}\`
-
-  // 包装 onRegisterProcess 以传递容器 ID
-  const wrappedOnRegisterProcess = (containerId: string, containerName: string) => {
-    logger.info('Container registered', { containerId, containerName })
-    if (onRegisterProcess) {
-      onRegisterProcess(containerId, containerName)
-    }
-  }
+  const groupFolder = `code-${Date.now()}`
 
   const result = await runner.runCodeAssistant({
     groupFolder,
@@ -557,5 +645,3 @@ export async function cleanupCodeContainers(): Promise<void> {
   const runner = new DockerContainerRunner()
   await runner.stopAllContainers()
 }
-
-export { DockerContainerRunner }

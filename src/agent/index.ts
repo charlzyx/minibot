@@ -291,14 +291,14 @@ IMPORTANT: Provide timely status updates during execution. Report progress and i
         nextStep = 4
         response = `Skill tags set to: ${tags.join(', ')}\n\nNow, please write the skill implementation code:\n\n` +
           `Skill code should export an object with an execute method, for example:\n\n` +
-          ````javascript\n` +
-          `module.exports = {\n` +
-          `  async execute(context, args) {\n` +
-          `    return "Skill execution result"\n` +
-          `  }\n` +
-          `}\n` +
-          ````\n\n` +
-          `Please enter your skill code:`
+          '```javascript\n' +
+          'module.exports = {\n' +
+          '  async execute(context, args) {\n' +
+          '    return "Skill execution result"\n' +
+          '  }\n' +
+          '}\n' +
+          '```\n\n' +
+          'Please enter your skill code:'
         break
 
       case 4:
