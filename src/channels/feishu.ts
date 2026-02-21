@@ -8,101 +8,85 @@ type MessageHandler = (message: FeishuMessage) => Promise<void>
 
 /**
  * Message deduplication cache with TTL
+ * Based on nanobot's OrderedDict approach for efficient deduplication
  */
 class MessageDeduplicator {
   private processedMessages = new Map<string, number>()
   private readonly maxAge = 5 * 60 * 1000 // 5 minutes
-  private readonly maxCacheSize = 10000
+  private readonly maxCacheSize = 1000
 
+  /**
+   * Check if message has been processed, mark as processed if not
+   */
   isProcessed(messageId: string): boolean {
     const now = Date.now()
 
     if (this.processedMessages.has(messageId)) {
       const timestamp = this.processedMessages.get(messageId)!
-
       if (now - timestamp < this.maxAge) {
-        logger.debug('Duplicate message ignored', { messageId })
         return true
       }
+      // Expired entry, remove it
+      this.processedMessages.delete(messageId)
     }
 
+    // Mark as processed
     this.processedMessages.set(messageId, now)
     this.cleanup()
-
     return false
   }
 
+  /**
+   * Clean up old entries when cache exceeds max size
+   * Keeps most recent maxCacheSize / 2 entries
+   */
   private cleanup(): void {
     if (this.processedMessages.size > this.maxCacheSize) {
       const now = Date.now()
+      let removed = 0
+
+      // Remove expired entries first
       for (const [id, timestamp] of this.processedMessages.entries()) {
         if (now - timestamp > this.maxAge) {
           this.processedMessages.delete(id)
+          removed++
         }
       }
-      logger.debug('Cleaned up old message IDs', { remaining: this.processedMessages.size })
+
+      // If still too many, remove oldest entries
+      const targetSize = Math.floor(this.maxCacheSize / 2)
+      while (this.processedMessages.size > targetSize) {
+        const firstKey = this.processedMessages.keys().next().value
+        this.processedMessages.delete(firstKey)
+        removed++
+      }
+
+      if (removed > 0) {
+        logger.debug('Cleaned up message cache', { removed, remaining: this.processedMessages.size })
+      }
     }
   }
 
   clear(): void {
     this.processedMessages.clear()
   }
-}
-
-/**
- * Message queue for batched processing
- */
-class MessageQueue {
-  private mainQueue: Array<() => Promise<void>> = []
-  private pendingMessages: FeishuMessage[] = []
-  private processing = false
-
-  get isEmpty(): boolean {
-    return this.mainQueue.length === 0 && this.pendingMessages.length === 0
-  }
 
   get size(): number {
-    return this.mainQueue.length + this.pendingMessages.length
-  }
-
-  enqueue(task: () => Promise<void>): void {
-    this.mainQueue.push(task)
-  }
-
-  enqueuePending(message: FeishuMessage): void {
-    this.pendingMessages.push(message)
-  }
-
-  isProcessing(): boolean {
-    return this.processing
-  }
-
-  setProcessing(processing: boolean): void {
-    this.processing = processing
-  }
-
-  getPending(): FeishuMessage[] {
-    return this.pendingMessages
-  }
-
-  shiftTask(): (() => Promise<void>) | undefined {
-    return this.mainQueue.shift()
-  }
-
-  clearPending(): FeishuMessage[] {
-    const messages = this.pendingMessages.splice(0, this.pendingMessages.length)
-    return messages
+    return this.processedMessages.size
   }
 }
 
+// Global WebSocket client and handler
 let wsClient: lark.WSClient | null = null
 let messageHandler: MessageHandler | null = null
-const messageDeduplicator = new MessageDeduplicator()
-const messageQueue = new MessageQueue()
 let messageCounter = 0
+
+// Message deduplicator singleton
+const messageDeduplicator = new MessageDeduplicator()
 
 /**
  * Feishu Channel - Handles Feishu messaging integration
+ * Based on nanobot's simplified approach with direct message handling
  */
 export class FeishuChannel {
   private client: lark.Client
@@ -127,17 +111,20 @@ export class FeishuChannel {
   ): Promise<{ message_id: string; data: Record<string, unknown> }> {
     logger.debug('Sending message', { contentLength: content.length, receiveId, parentId })
 
+    // Determine receive_id_type based on chat_id format
+    // open_id starts with "ou_", chat_id starts with "oc_"
+    const receiveIdType = receiveId.startsWith('oc_') ? 'chat_id' : 'open_id'
+
     const result = await this.client.im.message.create({
       params: {
-        receive_id_type: 'open_id'
+        receive_id_type: receiveIdType
       },
       data: {
         receive_id: receiveId,
         content: JSON.stringify({
           text: content
         }),
-        msg_type: 'text',
-        ...(parentId && { reply_in_thread: { message_id: parentId } })
+        msg_type: 'text'
       }
     })
 
@@ -195,7 +182,7 @@ export class FeishuChannel {
   }
 
   /**
-   * Send a card message
+   * Send a card message with markdown support
    */
   async sendCardMessage(
     content: string,
@@ -214,15 +201,17 @@ export class FeishuChannel {
       ]
     }
 
+    // Determine receive_id_type based on chat_id format
+    const receiveIdType = receiveId.startsWith('oc_') ? 'chat_id' : 'open_id'
+
     const result = await this.client.im.message.create({
       params: {
-        receive_id_type: 'open_id'
+        receive_id_type: receiveIdType
       },
       data: {
         receive_id: receiveId,
         content: JSON.stringify(card),
-        msg_type: 'interactive',
-        ...(parentId && { reply_in_thread: { message_id: parentId } })
+        msg_type: 'interactive'
       }
     })
 
@@ -241,127 +230,98 @@ export class FeishuChannel {
     }
   }
 
-  /**
-   * Add reaction to a message
-   */
-  async addReaction(messageId: string, emojiType: string = 'THUMBSUP'): Promise<void> {
-    try {
-      const result = await this.client.im.messageReaction.create({
-        path: {
-          message_id: messageId
-        },
-        data: {
-          reaction_type: {
-            emoji_type: emojiType
-          }
-        }
-      } as any)
-
-      if (result.code !== 0) {
-        logger.warn('Failed to add reaction', { messageId, emojiType, error: result.msg })
-      } else {
-        logger.debug('Added reaction successfully', { messageId, emojiType })
-      }
-    } catch (error) {
-      logger.error('Error adding reaction', error, { messageId, emojiType })
-    }
-  }
-
   getConfig(): FeishuConfig {
     return this.config
   }
 }
 
 /**
- * Check if a message has been processed (deduplication)
+ * Process a single Feishu message
+ * Simplified approach based on nanobot - handle each message independently
  */
-function isMessageProcessed(messageId: string): boolean {
-  return messageDeduplicator.isProcessed(messageId)
-}
-
-/**
- * Process the message queue
- */
-async function processMessageQueue(): Promise<void> {
-  if (messageQueue.isProcessing()) {
-    logger.debug('Queue already being processed, will check later')
-    setTimeout(() => {
-      if (!messageQueue.isEmpty) {
-        processMessageQueue()
-      }
-    }, 100)
+async function processFeishuMessage(data: any, msgNum: number): Promise<void> {
+  const message = data.message
+  if (!message) {
+    logger.warn('No message in event data', { msgNum, data })
     return
   }
 
-  messageQueue.setProcessing(true)
-  logger.info('Starting queue processing', { queueSize: messageQueue.size })
+  const messageId = message.message_id
+  if (!messageId) {
+    logger.warn('No message_id in message', { msgNum })
+    return
+  }
 
-  try {
-    let processedCount = 0
+  // Deduplication check
+  if (messageDeduplicator.isProcessed(messageId)) {
+    logger.debug('Duplicate message ignored', { messageId, msgNum })
+    return
+  }
 
-    while (!messageQueue.isEmpty) {
-      const task = messageQueue.shiftTask()
-      if (task) {
-        try {
-          await task()
-          processedCount++
-          logger.debug('Processed main queue message', { count: processedCount })
-        } catch (error) {
-          logger.error('Error processing main queue message', error)
-        }
-      }
-    }
+  const chatId = message.chat_id
+  const content = message.content
+  const msgType = message.message_type
+  const chatType = message.chat_type
 
-    if (messageQueue.shiftTask() !== undefined && messageQueue.getPending().length > 0) {
-      logger.info('Processing pending messages', { count: messageQueue.getPending().length })
+  let userOpenId = ''
+  if (data.sender && data.sender.sender_id) {
+    userOpenId = data.sender.sender_id.open_id || ''
+  }
 
-      const messagesToProcess = messageQueue.clearPending()
+  const senderType = data.sender?.sender_type || ''
+  if (senderType === 'bot') {
+    logger.debug('Ignoring bot message', { msgNum })
+    return
+  }
 
-      if (messagesToProcess.length > 0 && messageHandler) {
-        try {
-          const firstMessage = messagesToProcess[0]
-          const userOpenId = firstMessage.sender_id?.open_id || ''
+  logger.info('Message received', {
+    msgNum,
+    messageId,
+    userOpenId,
+    chatId,
+    chatType,
+    msgType,
+    senderType
+  })
 
-          if (messagesToProcess.length === 1) {
-            logger.debug('Processing single pending message')
-            await messageHandler(firstMessage)
-            processedCount++
-          } else {
-            const combinedContent = messagesToProcess.map(m => m.content).join('\n')
-            logger.debug(`Processing ${messagesToProcess.length} pending messages combined`)
+  // Parse text message content
+  if (msgType === 'text' && content && userOpenId) {
+    try {
+      const textContent = JSON.parse(content).text || ''
 
-            await messageHandler({
-              message_id: firstMessage.message_id,
-              msg_type: firstMessage.msg_type,
-              chat_id: firstMessage.chat_id,
-              content: combinedContent,
-              sender_id: firstMessage.sender_id
-            })
-            processedCount++
+      logger.debug('Text message content parsed', {
+        msgNum,
+        userOpenId,
+        contentLength: textContent.length,
+        messageId
+      })
+
+      if (messageHandler && textContent) {
+        const feishuMessage: FeishuMessage = {
+          message_id: messageId,
+          msg_type: msgType,
+          chat_id: chatId,
+          content: textContent,
+          sender_id: {
+            open_id: userOpenId
           }
-
-          logger.info('Processed pending messages', { count: processedCount })
-        } catch (error) {
-          logger.error('Error processing pending messages', error)
         }
+
+        // Handle message independently - no queue needed
+        await messageHandler(feishuMessage)
+        logger.info('Message handled', { messageId, msgNum })
       }
+    } catch (error) {
+      logger.error('Failed to parse message content', error, { msgNum, content })
     }
-
-    logger.info('Queue processing completed', { processedCount })
-  } finally {
-    messageQueue.setProcessing(false)
-
-    if (!messageQueue.isEmpty) {
-      logger.debug('New messages in queue, processing again...')
-      setTimeout(processMessageQueue, 0)
-    } else {
-      logger.debug('All queues are empty, waiting for new messages')
-    }
+  } else {
+    logger.debug('Unsupported message type or empty content', { msgType, msgNum, hasContent: !!content })
   }
 }
 
 /**
  * Start Feishu WebSocket connection
+ * Simplified approach - no complex queue logic
  */
 export function startFeishuWS(
   config: FeishuConfig,
@@ -373,15 +333,14 @@ export function startFeishuWS(
   }
 
   messageHandler = onMessage
-  const feishuChannel = new FeishuChannel(config)
   const eventDispatcher = new lark.EventDispatcher({})
 
+  // Register message event handler
   eventDispatcher.register({
     'im.message.receive_v1': async (data: any) => {
-      let msgNum = 0
       try {
         messageCounter++
-        msgNum = messageCounter
+        const msgNum = messageCounter
 
         logger.debug('Event received', {
           msgNum,
@@ -390,126 +349,19 @@ export function startFeishuWS(
           senderId: data?.sender?.sender_id?.open_id
         })
 
-        const message = data.message
-        if (!message) {
-          logger.warn('No message in event data', { msgNum, data })
-          return
-        }
-
-        const messageId = message.message_id
-        if (!messageId) {
-          logger.warn('No message_id in message', { msgNum })
-          return
-        }
-
-        if (isMessageProcessed(messageId)) {
-          logger.info('Duplicate message ignored', { messageId, msgNum })
-          return
-        }
-
-        const chatId = message.chat_id
-        const content = message.content
-        const msgType = message.message_type
-        const chatType = message.chat_type
-
-        let userOpenId = ''
-        if (data.sender && data.sender.sender_id) {
-          userOpenId = data.sender.sender_id.open_id || ''
-        }
-
-        const senderType = data.sender?.sender_type || ''
-        if (senderType === 'bot') {
-          logger.debug('Ignoring bot message', { msgNum })
-          return
-        }
-
-        logger.info('Message received', {
-          msgNum,
-          messageId,
-          userOpenId,
-          chatId,
-          chatType,
-          msgType,
-          senderType
-        })
-
-        if (msgType === 'text' && content && userOpenId) {
-          try {
-            const textContent = JSON.parse(content).text
-
-            logger.debug('Text message content parsed', {
-              msgNum,
-              userOpenId,
-              contentLength: textContent.length,
-              messageId
-            })
-
-            if (messageHandler) {
-              const replyTo = chatType === 'group' ? chatId : userOpenId
-
-              // Note: 'GET' is not a valid emoji_type, removed
-              logger.debug('Processing message', { messageId })
-
-              const feishuMessage: FeishuMessage = {
-                message_id: messageId,
-                msg_type: msgType,
-                chat_id: chatId,
-                content: textContent,
-                sender_id: {
-                  open_id: userOpenId
-                }
-              }
-
-              const task = async () => {
-                try {
-                  await feishuChannel.addReaction(messageId, 'THUMBSUP')
-                  logger.debug('Added THUMBSUP reaction', { messageId })
-
-                  logger.info('Processing message handler', { messageId, msgNum })
-                  await messageHandler!(feishuMessage)
-                  logger.info('Message handler completed', { messageId, msgNum })
-                } catch (error) {
-                  logger.error('Message handler error', error, { messageId, msgNum })
-                }
-              }
-
-              if (messageQueue.isProcessing()) {
-                messageQueue.enqueuePending(feishuMessage)
-                logger.debug('Message added to pending queue', {
-                  messageId,
-                  pendingCount: messageQueue.getPending().length
-                })
-
-                await feishuChannel.addReaction(messageId, 'CLOCK')
-                logger.debug('Added CLOCK reaction', { messageId })
-              } else {
-                messageQueue.enqueue(task)
-                logger.debug('Message added to main queue', {
-                  messageId,
-                  queueSize: messageQueue.size
-                })
-              }
-
-              setTimeout(() => {
-                processMessageQueue()
-              }, 0)
-            }
-          } catch (error) {
-            logger.error('Failed to parse message content', error, { msgNum, content })
-          }
-        } else {
-          logger.warn('Unsupported message type', { msgType, hasContent: !!content, userOpenId })
-        }
+        // Process message independently - no queue
+        await processFeishuMessage(data, msgNum)
       } catch (error) {
-        logger.error('Error processing message', error, { msgNum })
+        logger.error('Error processing message event', error)
       }
     }
   })
 
+  // Create and start WebSocket client
   wsClient = new lark.WSClient({
     appId: config.appId,
     appSecret: config.appSecret,
-    loggerLevel: lark.LoggerLevel.debug
+    loggerLevel: lark.LoggerLevel.warn // Reduce noise from lark SDK
   })
 
   logger.info('WebSocket client created', { appId: config.appId })
@@ -526,12 +378,17 @@ export function startFeishuWS(
  */
 export function stopFeishuWS(): void {
   if (wsClient) {
-    wsClient.close()
+    try {
+      wsClient.close()
+    } catch (error) {
+      logger.warn('Error closing WebSocket', error)
+    }
     wsClient = null
     logger.info('WebSocket client stopped')
   }
 
-  // Clear deduplicator
+  // Clear message handler and deduplicator
+  messageHandler = null
   messageDeduplicator.clear()
 }
 
@@ -540,4 +397,20 @@ export function stopFeishuWS(): void {
  */
 export function getFeishuChannel(config: FeishuConfig): FeishuChannel {
   return new FeishuChannel(config)
+}
+
+/**
+ * Get deduplicator stats for testing
+ */
+export function getDeduplicatorStats(): { size: number } {
+  return {
+    size: messageDeduplicator.size
+  }
+}
+
+/**
+ * Clear deduplicator for testing
+ */
+export function clearDeduplicator(): void {
+  messageDeduplicator.clear()
 }
