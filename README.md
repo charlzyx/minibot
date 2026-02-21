@@ -17,7 +17,6 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 - 🤖 **Subagent Architecture** - Distributed task execution and load balancing
 - 🔍 **Error Handling** - Intelligent error classification and retry mechanisms
 - 🐳 **Containerization** - Run agents in isolated containers for security and resource management
-- 📚 **NanoClaw Integration** - Learn and run NanoClaw in containers
 
 ## 🏗️ Architecture
 
@@ -85,9 +84,11 @@ minibot/
 │   ├── session/            # 会话管理
 │   ├── skills/             # 技能系统
 │   ├── task-scheduler.ts   # 任务调度器
+│   ├── types/              # 类型定义
+│   ├── utils/              # 工具函数
 │   └── tools/              # 工具系统
 ├── docs/                   # 文档目录
-├── nanoclaw/               # NanoClaw 项目
+├── tests/                  # 测试目录
 ├── package.json          # 项目配置
 ├── tsconfig.json        # TypeScript 配置
 ├── README.md            # 项目说明

@@ -3,24 +3,25 @@ import sqlite3 from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
-import { ConfigSchema } from './schema'
-import type { Config } from './schema'
 import dotenv from 'dotenv'
+import type { Config } from '@/types'
+import { ConfigurationError, createLogger } from '@/utils'
 
 dotenv.config()
 
-export type { Config }
+const logger = createLogger('ConfigManager')
 
 const HOME = process.env.HOME || process.env.USERPROFILE || '/tmp'
 
 let customWorkspace: string | null = null
 
-export function setCustomWorkspace(workspace: string) {
+export function setCustomWorkspace(workspace: string): void {
+  logger.info('Setting custom workspace', { workspace })
   customWorkspace = workspace
 }
 
 export function getWorkspace(): string {
-  return customWorkspace || HOME + '/minibot'
+  return customWorkspace || path.join(HOME, 'minibot')
 }
 
 function getConfigFilePath(): string {
@@ -30,13 +31,16 @@ function getConfigFilePath(): string {
 
 function getDBPath(): string {
   const workspace = getWorkspace()
-  return path.join(workspace, 'db', 'memory.db')
+  return path.join(workspace, 'db', 'config.db')
 }
 
 function getDBDir(): string {
   return path.dirname(getDBPath())
 }
 
+/**
+ * Database row interface
+ */
 interface ConfigRow {
   id: number
   key: string
@@ -44,180 +48,341 @@ interface ConfigRow {
   updatedAt: number
 }
 
+/**
+ * Default configuration
+ */
+const DEFAULT_CONFIG: Config = {
+  provider: {
+    name: 'zhipu',
+    apiKey: '',
+    apiBase: 'https://open.bigmodel.cn/api/coding/paas/v4'
+  },
+  model: {
+    name: 'glm-4.7',
+    maxTokens: 4000,
+    temperature: 0.7
+  },
+  channels: {
+    feishu: {
+      enabled: false,
+      appId: '',
+      appSecret: '',
+      encryptKey: '',
+      verificationToken: '',
+      allowFrom: []
+    },
+    wechat: {
+      enabled: false,
+      appId: '',
+      appSecret: ''
+    },
+    dingtalk: {
+      enabled: false,
+      clientId: '',
+      clientSecret: '',
+      allowFrom: []
+    },
+    qq: {
+      enabled: false,
+      appId: '',
+      secret: '',
+      allowFrom: []
+    },
+    discord: {
+      enabled: false,
+      botToken: '',
+      appToken: '',
+      groupPolicy: 'mention'
+    },
+    slack: {
+      enabled: false,
+      botToken: '',
+      appToken: '',
+      groupPolicy: 'mention'
+    }
+  },
+  tools: {
+    shell: { enabled: true },
+    web: { enabled: true },
+    file: { enabled: true, workspace: '' },
+    llm: { enabled: true },
+    memory: { enabled: true }
+  },
+  security: {
+    restrictToWorkspace: false,
+    maxSessionCache: 500
+  }
+}
+
+/**
+ * Configuration Manager
+ */
 export class ConfigManager {
   private db!: sqlite3.Database
   private initialized: boolean = false
+  private dbPath: string
 
   constructor() {
+    this.dbPath = getDBPath()
   }
 
-  private async initialize() {
+  private async initialize(): Promise<void> {
     if (this.initialized) {
       return
     }
-    
-    const dbDir = getDBDir()
-    if (!existsSync(dbDir)) {
-      await fs.mkdir(dbDir, { recursive: true })
+
+    try {
+      const dbDir = getDBDir()
+      if (!existsSync(dbDir)) {
+        await fs.mkdir(dbDir, { recursive: true })
+        logger.debug(`Created config database directory: ${dbDir}`)
+      }
+
+      this.db = new sqlite3(this.dbPath)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS config (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          key TEXT UNIQUE NOT NULL,
+          value TEXT NOT NULL,
+          updatedAt INTEGER NOT NULL
+        )
+      `)
+      this.db.pragma('journal_mode = WAL')
+      this.initialized = true
+
+      logger.debug('Config database initialized')
+    } catch (error) {
+      throw new ConfigurationError('Failed to initialize config database', { error })
     }
-    this.db = new sqlite3(getDBPath())
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS config (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT UNIQUE NOT NULL,
-        value TEXT NOT NULL,
-        updatedAt INTEGER NOT NULL
-      )
-    `)
-    this.db.pragma('journal_mode = WAL')
-    this.initialized = true
   }
 
-  private async ensureInitialized() {
+  private async ensureInitialized(): Promise<void> {
     if (!this.initialized) {
       await this.initialize()
     }
   }
 
+  /**
+   * Load configuration from database and environment
+   */
   async loadConfig(): Promise<Config> {
     await this.ensureInitialized()
-    
-    const rows = this.db.prepare('SELECT key, value FROM config').all() as ConfigRow[]
-    
-    const config: any = {}
-    
-    for (const row of rows) {
-      try {
-        config[row.key] = JSON.parse(row.value)
-      } catch (e) {
-        console.warn(`Failed to parse config for key ${row.key}:`, e)
-      }
-    }
-    
-    if (Object.keys(config).length === 0) {
-      let fileConfig: any = {}
-      
-      const configFilePath = getConfigFilePath()
-      if (existsSync(configFilePath)) {
+
+    try {
+      const rows = this.db.prepare('SELECT key, value FROM config').all() as ConfigRow[]
+
+      const dbConfig: Record<string, unknown> = {}
+
+      for (const row of rows) {
         try {
-          delete require.cache[require.resolve(configFilePath)]
-          fileConfig = require(configFilePath)
-          console.log(`[Config] Loaded config from ${configFilePath}`)
-        } catch (e) {
-          console.warn(`[Config] Failed to load config file:`, e)
+          dbConfig[row.key] = JSON.parse(row.value)
+        } catch (error) {
+          logger.warn(`Failed to parse config for key ${row.key}`, error)
         }
       }
-      
-      return {
-        provider: {
-          name: 'zhipu',
-          apiKey: process.env.ZHIPU_API_KEY || fileConfig.provider?.apiKey || '',
-          apiBase: process.env.ZHIPU_BASE_URL || fileConfig.provider?.apiBase || 'https://open.bigmodel.cn/api/coding/paas/v4'
-        },
-        model: {
-          name: 'glm-4.7',
-          maxTokens: 4000,
-          temperature: 0.7
-        },
-        channels: {
-          feishu: {
-            enabled: !!process.env.FEISHU_APP_ID && !!process.env.FEISHU_APP_SECRET,
-            appId: process.env.FEISHU_APP_ID || fileConfig.channels?.feishu?.appId || '',
-            appSecret: process.env.FEISHU_APP_SECRET || fileConfig.channels?.feishu?.appSecret || '',
-            encryptKey: fileConfig.channels?.feishu?.encryptKey || '',
-            verificationToken: fileConfig.channels?.feishu?.verificationToken || '',
-            allowFrom: fileConfig.channels?.feishu?.allowFrom || []
-          },
-          wechat: {
-            enabled: false,
-            appId: '',
-            appSecret: ''
-          },
-          dingtalk: {
-            enabled: false,
-            clientId: '',
-            clientSecret: '',
-            allowFrom: []
-          },
-          qq: {
-            enabled: false,
-            appId: '',
-            secret: '',
-            allowFrom: []
-          },
-          discord: {
-            enabled: false,
-            botToken: '',
-            appToken: '',
-            groupPolicy: 'mention'
-          },
-          slack: {
-            enabled: false,
-            botToken: '',
-            appToken: '',
-            groupPolicy: 'mention'
-          }
-        },
-        tools: {
-          shell: {
-            enabled: true
-          },
-          web: {
-            enabled: true
-          },
-          file: {
-            enabled: true,
-            workspace: process.env.HOME + '/minibot'
-          }
-        },
-        security: {
-          restrictToWorkspace: false
-        }
+
+      if (Object.keys(dbConfig).length === 0) {
+        return await this.loadConfigFromFile()
       }
+
+      // Merge with environment variables
+      const mergedConfig = this.mergeWithEnv(dbConfig as Partial<Config>)
+      return this.validateConfig(mergedConfig)
+    } catch (error) {
+      if (error instanceof ConfigurationError) {
+        throw error
+      }
+      logger.error('Failed to load config', error)
+      throw new ConfigurationError('Failed to load configuration', { error })
     }
-    
-    return ConfigSchema.parse(config)
   }
 
+  /**
+   * Load configuration from file
+   */
+  private async loadConfigFromFile(): Promise<Config> {
+    const configFilePath = getConfigFilePath()
+    let fileConfig: Partial<Config> = {}
+
+    if (existsSync(configFilePath)) {
+      try {
+        // Clear require cache to reload config
+        delete require.cache[require.resolve(configFilePath)]
+        const loaded = require(configFilePath)
+        fileConfig = loaded.default || loaded
+        logger.info(`Loaded config from file: ${configFilePath}`)
+      } catch (error) {
+        logger.warn('Failed to load config file', { configFilePath, error })
+      }
+    }
+
+    const mergedConfig = this.mergeWithEnv(fileConfig)
+    return this.validateConfig(mergedConfig)
+  }
+
+  /**
+   * Merge configuration with environment variables
+   */
+  private mergeWithEnv(config: Partial<Config>): Partial<Config> {
+    const merged: Partial<Config> = { ...config }
+
+    // Provider config from env
+    if (!merged.provider) {
+      merged.provider = {}
+    }
+    merged.provider.apiKey = process.env.ZHIPU_API_KEY ||
+                            process.env.OPENAI_API_KEY ||
+                            merged.provider.apiKey ||
+                            ''
+    merged.provider.apiBase = process.env.ZHIPU_BASE_URL ||
+                             process.env.OPENAI_BASE_URL ||
+                             merged.provider.apiBase ||
+                             'https://open.bigmodel.cn/api/coding/paas/v4'
+
+    // Feishu config from env
+    if (!merged.channels) {
+      merged.channels = {}
+    }
+    if (!merged.channels.feishu) {
+      merged.channels.feishu = { enabled: false, appId: '', appSecret: '', allowFrom: [] }
+    }
+    merged.channels.feishu.enabled = !!process.env.FEISHU_APP_ID && !!process.env.FEISHU_APP_SECRET
+    merged.channels.feishu.appId = process.env.FEISHU_APP_ID || merged.channels.feishu.appId || ''
+    merged.channels.feishu.appSecret = process.env.FEISHU_APP_SECRET || merged.channels.feishu.appSecret || ''
+
+    // Workspace from env
+    const workspace = process.env.WORKSPACE || getWorkspace()
+    if (!merged.tools) {
+      merged.tools = {}
+    }
+    if (!merged.tools.file) {
+      merged.tools.file = { enabled: true, workspace: '' }
+    }
+    merged.tools.file.workspace = workspace
+
+    // Security config from env
+    if (!merged.security) {
+      merged.security = {}
+    }
+    merged.security.maxSessionCache = parseInt(process.env.MAX_SESSION_CACHE || '500', 10)
+
+    return merged
+  }
+
+  /**
+   * Validate configuration using schema
+   */
+  private validateConfig(config: Partial<Config>): Config {
+    // Create a complete config with defaults
+    const completeConfig: Config = {
+      provider: {
+        name: config.provider?.name || DEFAULT_CONFIG.provider.name,
+        apiKey: config.provider?.apiKey || DEFAULT_CONFIG.provider.apiKey,
+        apiBase: config.provider?.apiBase || DEFAULT_CONFIG.provider.apiBase
+      },
+      model: {
+        name: config.model?.name || DEFAULT_CONFIG.model.name,
+        maxTokens: config.model?.maxTokens || DEFAULT_CONFIG.model.maxTokens,
+        temperature: config.model?.temperature ?? DEFAULT_CONFIG.model.temperature
+      },
+      channels: {
+        feishu: { ...DEFAULT_CONFIG.channels.feishu, ...config.channels?.feishu },
+        wechat: { ...DEFAULT_CONFIG.channels.wechat, ...config.channels?.wechat },
+        dingtalk: { ...DEFAULT_CONFIG.channels.dingtalk, ...config.channels?.dingtalk },
+        qq: { ...DEFAULT_CONFIG.channels.qq, ...config.channels?.qq },
+        discord: { ...DEFAULT_CONFIG.channels.discord, ...config.channels?.discord },
+        slack: { ...DEFAULT_CONFIG.channels.slack, ...config.channels?.slack }
+      },
+      tools: {
+        shell: { ...DEFAULT_CONFIG.tools.shell, ...config.tools?.shell },
+        web: { ...DEFAULT_CONFIG.tools.web, ...config.tools?.web },
+        file: { ...DEFAULT_CONFIG.tools.file, ...config.tools?.file },
+        llm: { ...DEFAULT_CONFIG.tools.llm, ...config.tools?.llm },
+        memory: { ...DEFAULT_CONFIG.tools.memory, ...config.tools?.memory }
+      },
+      security: {
+        ...DEFAULT_CONFIG.security,
+        ...config.security
+      }
+    }
+
+    return completeConfig
+  }
+
+  /**
+   * Save configuration to database
+   */
   async saveConfig(config: Partial<Config>): Promise<void> {
     await this.ensureInitialized()
-    
-    const currentConfig = await this.loadConfig()
-    const mergedConfig = { ...currentConfig, ...config }
-    
-    const validatedConfig = ConfigSchema.parse(mergedConfig)
-    const now = Date.now()
-    
-    const save = (key: string, value: any) => {
-      const jsonString = JSON.stringify(value)
-      const stmt = this.db.prepare(
-        `INSERT INTO config (key, value, updatedAt) VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = ?, updatedAt = ?`
-      )
-      stmt.run(key, jsonString, now, jsonString, now)
-    }
-    
-    for (const [key, value] of Object.entries(validatedConfig)) {
-      save(key, value)
+
+    try {
+      const currentConfig = await this.loadConfig()
+      const mergedConfig = { ...currentConfig, ...config }
+      const validatedConfig = this.validateConfig(mergedConfig)
+      const now = Date.now()
+
+      const save = (key: string, value: unknown): void => {
+        const jsonString = JSON.stringify(value)
+        const stmt = this.db.prepare(
+          `INSERT INTO config (key, value, updatedAt) VALUES (?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = ?, updatedAt = ?`
+        )
+        stmt.run(key, jsonString, now, jsonString, now)
+      }
+
+      for (const [key, value] of Object.entries(validatedConfig)) {
+        save(key, value)
+      }
+
+      logger.info('Configuration saved', { keys: Object.keys(config) })
+    } catch (error) {
+      logger.error('Failed to save config', error)
+      throw new ConfigurationError('Failed to save configuration', { error })
     }
   }
 
+  /**
+   * Get a specific config value
+   */
   async get<K extends keyof Config>(key: K): Promise<Config[K]> {
     const config = await this.loadConfig()
     return config[key]
   }
 
+  /**
+   * Set a specific config value
+   */
   async set<K extends keyof Config>(key: K, value: Config[K]): Promise<void> {
-    await this.saveConfig({ [key]: value })
+    await this.saveConfig({ [key]: value } as Partial<Config>)
   }
 
+  /**
+   * Reset configuration to defaults
+   */
   async reset(): Promise<void> {
-    const defaultConfig = ConfigSchema.parse({})
-    await this.saveConfig(defaultConfig)
+    try {
+      // Clear database
+      this.db.prepare('DELETE FROM config').run()
+      logger.info('Configuration reset to defaults')
+    } catch (error) {
+      logger.error('Failed to reset config', error)
+      throw new ConfigurationError('Failed to reset configuration', { error })
+    }
   }
 
-  close() {
-    this.db.close()
+  /**
+   * Close database connection
+   */
+  close(): void {
+    try {
+      if (this.initialized) {
+        this.db.close()
+        this.initialized = false
+        logger.debug('Config database connection closed')
+      }
+    } catch (error) {
+      logger.error('Failed to close config database', error)
+    }
   }
 }
 
@@ -230,9 +395,13 @@ export function getConfigManager(): ConfigManager {
   return configManager
 }
 
-export function closeConfigManager() {
+export function closeConfigManager(): void {
   if (configManager) {
     configManager.close()
     configManager = null
+    logger.info('Config manager closed')
   }
 }
+
+// Export types
+export type { Config }

@@ -17,6 +17,7 @@ This release includes a comprehensive refactoring of the codebase to improve typ
   - Centralized type definitions in `src/types/index.ts`
   - Strict TypeScript configuration with path aliases
   - Type-safe tool interfaces and parameters
+  - Added `FeishuMessage`, `PluginMetadata`, `PluginConfig` types
 
 - **Error Handling**
   - Custom error class hierarchy (`MinibotError`, `ValidationError`, `ToolExecutionError`, `LLMError`, `SecurityError`, etc.)
@@ -49,6 +50,7 @@ This release includes a comprehensive refactoring of the codebase to improve typ
 - **Testing Infrastructure**
   - Vitest configuration with coverage reporting
   - Unit tests for LRU cache, Shell tool, File tool
+  - Unit tests for Session, Memory, and Commands modules
   - Test directory structure (`tests/unit/`, `tests/integration/`)
 
 - **Documentation**
@@ -81,6 +83,42 @@ This release includes a comprehensive refactoring of the codebase to improve typ
   - Standardized error handling
   - Type-safe return values
 
+- **Memory Module**
+  - Added `MemoryError` for proper error handling
+  - Structured logging throughout
+  - Input validation for empty content
+  - Type-safe interfaces
+
+- **Config Module**
+  - Replaced `console.log/warn` with structured logging
+  - Removed `any` types
+  - Added `ConfigurationError` usage
+  - DEFAULT_CONFIG constant with proper typing
+
+- **Commands Module**
+  - Added `CommandContext` interface for type safety
+  - Structured logging
+  - Better error formatting
+  - Type-safe command execution
+
+- **Feishu Channel**
+  - Created `MessageDeduplicator` class with TTL (5 minutes)
+  - Created `MessageQueue` class for batched processing
+  - Replaced all `console.log` with structured logging
+  - Improved code structure and type safety
+
+- **Plugins Module**
+  - Replaced all `console.log/error` with structured logging
+  - Added proper type imports from `@/types`
+  - Added `getStats()` method for plugin statistics
+  - Improved error handling with detailed logging
+
+- **Cron Module**
+  - Replaced all `console.log` with structured logging
+  - Simplified `CronJob` interface to match types in `@/types`
+  - Better error tracking with `errorCount` field
+  - Improved job execution logging
+
 ### Fixed
 
 - Memory leak in session manager (unlimited cache growth)
@@ -109,6 +147,14 @@ This release includes a comprehensive refactoring of the codebase to improve typ
 - Strict TypeScript mode catches more errors at compile time
 - Comprehensive test coverage for critical components
 - Clear contribution guidelines
+
+### Removed
+
+- **NanoClaw References**
+  - Removed hardcoded NanoClaw references from `/code` command
+  - Changed command description from "学习 NanoClaw 并在容器中运行" to "启动代码助手并在容器中执行任务"
+  - Updated documentation to remove NanoClaw-specific examples
+  - Project structure no longer includes `nanoclaw/` directory reference
 
 ### Migration Guide
 

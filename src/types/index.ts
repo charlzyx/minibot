@@ -326,6 +326,36 @@ export interface WebRequestOptions {
 }
 
 // ============================================================================
+// Channel Types
+// ============================================================================
+
+export interface FeishuMessage {
+  message_id: string
+  msg_type: string
+  chat_id: string
+  content: string
+  sender_id?: {
+    open_id: string
+  }
+}
+
+// ============================================================================
+// Plugin Types
+// ============================================================================
+
+export interface PluginMetadata {
+  name: string
+  description?: string
+  version?: string
+  author?: string
+  dependencies?: string[]
+}
+
+export interface PluginConfig {
+  [key: string]: unknown
+}
+
+// ============================================================================
 // Cron Types
 // ============================================================================
 

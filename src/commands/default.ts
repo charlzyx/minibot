@@ -78,92 +78,57 @@ export const defaultCommands: Command[] = [
   },
   {
     name: 'code',
-    description: '学习 NanoClaw 并在容器中运行',
+    description: '启动代码助手并在容器中执行任务',
     usage: '/code [任务描述]',
     handler: async (args, context) => {
       const sessionManager = getSessionManager()
       const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-      
+
       const session = sessionManager.getOrCreate(sessionId)
-      session.activeSkill = 'claude-code'
+      session.activeSkill = 'code-assistant'
       await sessionManager.save(session)
-      
-      let response = '🤖 **NanoClaw 学习模式已启动**\n\n'
-      
+
+      let response = '🤖 **代码助手已启动**\n\n'
+
       if (args.length > 0) {
         const task = args.join(' ')
         response += `任务: ${task}\n\n`
       }
-      
-      // 学习 NanoClaw 代码
-      const nanoclawPath = '/tmp/minibot/nanoclaw'
-      let nanoclawFiles = []
-      
-      try {
-        const fs = require('fs')
-        const path = require('path')
-        
-        // 读取 NanoClaw 的主要文件
-        if (fs.existsSync(nanoclawPath)) {
-          // 只读取重要的文件，而不是所有的文件
-          const importantFiles = [
-            'src/index.ts',
-            'src/group-queue.ts',
-            'src/container-runner.ts',
-            'src/task-scheduler.ts',
-            'src/router.ts',
-            'src/db.ts'
-          ]
-          
-          for (const file of importantFiles) {
-            const fullPath = path.join(nanoclawPath, file)
-            if (fs.existsSync(fullPath)) {
-              nanoclawFiles.push(fullPath)
-            }
-          }
-          
-          response += `📚 已找到 ${nanoclawFiles.length} 个重要的 NanoClaw 文件\n\n`
-        } else {
-          response += `⚠️  未找到 NanoClaw 目录，将使用默认配置\n\n`
-        }
-      } catch (error) {
-        response += `⚠️  读取 NanoClaw 目录时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
-      }
-      
+
       // 在容器中运行
       try {
         const { runContainerAgent } = await import('../container-runner')
-        
+
         const group = {
-          folder: 'nanoclaw',
-          name: 'NanoClaw Container'
+          folder: 'workspace',
+          name: 'Code Assistant Container'
         }
-        
+
         const params = {
-          prompt: `学习 NanoClaw 代码并固定在容器中运行。\n\nNanoClaw 文件: ${nanoclawFiles.join(', ')}\n\n任务: ${args.join(' ')}`,
+          prompt: args.length > 0 ? args.join(' ') : '准备就绪，等待指令',
           sessionId: sessionId,
-          groupFolder: 'nanoclaw',
+          groupFolder: 'workspace',
           chatJid: sessionId,
           isMain: true
         }
-        
+
         const onRegisterProcess = (proc: ChildProcess, containerName: string, groupFolder: string) => {
           console.log(`[Container] 注册进程: ${containerName}`)
         }
-        
+
         const onOutput = async (output: any) => {
           console.log(`[Container] 输出: ${JSON.stringify(output)}`)
         }
-        
+
         response += `🚀 正在启动容器...\n\n`
-        
+
         const result = await runContainerAgent(
           group,
           params,
           onRegisterProcess,
           onOutput
         )
-        
+
         if (result.status === 'success') {
           response += `✅ 容器启动成功！\n\n`
           response += `📦 容器输出: ${result.result}\n\n`
@@ -173,14 +138,14 @@ export const defaultCommands: Command[] = [
       } catch (error) {
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
       }
-      
+
       response += `我现在可以帮助你完成以下任务：\n\n`
-      response += `- 📝 学习 NanoClaw 代码\n`
+      response += `- 💻 编写和调试代码\n`
       response += `- 🐳 在容器中运行代码\n`
-      response += `- 🔧 固定在容器中运行\n\n`
+      response += `- 🔧 代码审查和重构\n\n`
       response += `我会及时反馈执行状态，遇到问题立即通知。\n\n`
       response += `请告诉我你需要什么帮助！`
-      
+
       return response
     }
   },

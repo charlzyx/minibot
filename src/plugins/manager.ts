@@ -1,18 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import { getWorkspace } from '../config/manager'
+import { createLogger } from '../utils'
+import type { PluginConfig, PluginMetadata } from '@/types'
 
-export interface PluginMetadata {
-  name: string
-  description?: string
-  version?: string
-  author?: string
-  dependencies?: string[]
-}
-
-export interface PluginConfig {
-  [key: string]: any
-}
+const logger = createLogger('PluginManager')
 
 export interface Plugin {
   id: string
@@ -31,73 +23,92 @@ export class PluginManager {
   constructor() {
     this.pluginsDir = path.join(getWorkspace(), 'plugins')
     this.configDir = path.join(getWorkspace(), 'config', 'plugins')
+    logger.debug('PluginManager initialized', {
+      pluginsDir: this.pluginsDir,
+      configDir: this.configDir
+    })
   }
 
   async loadAllPlugins(): Promise<void> {
     try {
-      if (!fs.existsSync(this.pluginsDir)) {
-        fs.mkdirSync(this.pluginsDir, { recursive: true })
-        return
-      }
-
-      if (!fs.existsSync(this.configDir)) {
-        fs.mkdirSync(this.configDir, { recursive: true })
-      }
+      this.ensureDirectoriesExist()
 
       const files = fs.readdirSync(this.pluginsDir)
       const pluginFiles = files.filter(file => file.endsWith('.js') || file.endsWith('.ts'))
 
+      logger.info('Loading plugins', { count: pluginFiles.length })
+
       for (const file of pluginFiles) {
-        const filePath = path.join(this.pluginsDir, file)
-        const pluginId = path.basename(file, path.extname(file))
-        
-        try {
-          // 动态导入插件
-          const pluginModule = await import(filePath)
-          const pluginExports = pluginModule.default || pluginModule
-
-          // 加载插件配置
-          const config = this.loadPluginConfig(pluginId)
-
-          // 构建插件对象
-          const plugin: Plugin = {
-            id: pluginId,
-            metadata: pluginExports.metadata || {
-              name: pluginId,
-              version: '1.0.0'
-            },
-            config,
-            enabled: true,
-            initialize: pluginExports.initialize,
-            shutdown: pluginExports.shutdown
-          }
-
-          // 初始化插件
-          if (plugin.initialize) {
-            await plugin.initialize()
-          }
-
-          this.plugins.push(plugin)
-          console.log(`[PluginManager] Loaded plugin: ${plugin.metadata.name}`)
-        } catch (error) {
-          console.error(`[PluginManager] Failed to load plugin ${pluginId}:`, error)
-        }
+        await this.loadPlugin(file)
       }
+
+      logger.info('Plugins loaded', { total: this.plugins.length, enabled: this.getEnabledPlugins().length })
     } catch (error) {
-      console.error('[PluginManager] Failed to load plugins:', error)
+      logger.error('Failed to load plugins', error)
+    }
+  }
+
+  private async loadPlugin(file: string): Promise<void> {
+    const filePath = path.join(this.pluginsDir, file)
+    const pluginId = path.basename(file, path.extname(file))
+
+    try {
+      const pluginModule = await import(filePath)
+      const pluginExports = pluginModule.default || pluginModule
+
+      const config = this.loadPluginConfig(pluginId)
+
+      const plugin: Plugin = {
+        id: pluginId,
+        metadata: pluginExports.metadata || {
+          name: pluginId,
+          version: '1.0.0'
+        },
+        config,
+        enabled: true,
+        initialize: pluginExports.initialize,
+        shutdown: pluginExports.shutdown
+      }
+
+      if (plugin.initialize) {
+        await plugin.initialize()
+      }
+
+      this.plugins.push(plugin)
+      logger.info('Plugin loaded', {
+        id: pluginId,
+        name: plugin.metadata.name,
+        version: plugin.metadata.version
+      })
+    } catch (error) {
+      logger.error('Failed to load plugin', error, { pluginId, file })
+    }
+  }
+
+  private ensureDirectoriesExist(): void {
+    if (!fs.existsSync(this.pluginsDir)) {
+      fs.mkdirSync(this.pluginsDir, { recursive: true })
+      logger.debug('Created plugins directory', { path: this.pluginsDir })
+    }
+
+    if (!fs.existsSync(this.configDir)) {
+      fs.mkdirSync(this.configDir, { recursive: true })
+      logger.debug('Created plugin config directory', { path: this.configDir })
     }
   }
 
   private loadPluginConfig(pluginId: string): PluginConfig {
     const configPath = path.join(this.configDir, `${pluginId}.json`)
-    
+
     try {
       if (fs.existsSync(configPath)) {
         const configContent = fs.readFileSync(configPath, 'utf8')
-        return JSON.parse(configContent)
+        const config = JSON.parse(configContent) as PluginConfig
+        logger.debug('Plugin config loaded', { pluginId })
+        return config
       }
     } catch (error) {
-      console.error(`[PluginManager] Failed to load config for plugin ${pluginId}:`, error)
+      logger.error('Failed to load plugin config', error, { pluginId })
     }
 
     return {}
@@ -105,21 +116,22 @@ export class PluginManager {
 
   async savePluginConfig(pluginId: string, config: PluginConfig): Promise<void> {
     const configPath = path.join(this.configDir, `${pluginId}.json`)
-    
+
     try {
       if (!fs.existsSync(this.configDir)) {
         fs.mkdirSync(this.configDir, { recursive: true })
       }
 
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-      
-      // 更新内存中的插件配置
+
       const plugin = this.getPlugin(pluginId)
       if (plugin) {
         plugin.config = config
       }
+
+      logger.info('Plugin config saved', { pluginId })
     } catch (error) {
-      console.error(`[PluginManager] Failed to save config for plugin ${pluginId}:`, error)
+      logger.error('Failed to save plugin config', error, { pluginId })
       throw error
     }
   }
@@ -139,32 +151,53 @@ export class PluginManager {
   async enablePlugin(id: string): Promise<boolean> {
     const plugin = this.getPlugin(id)
     if (!plugin) {
+      logger.warn('Plugin not found', { id })
       return false
     }
 
     plugin.enabled = true
+    logger.info('Plugin enabled', { id })
     return true
   }
 
   async disablePlugin(id: string): Promise<boolean> {
     const plugin = this.getPlugin(id)
     if (!plugin) {
+      logger.warn('Plugin not found', { id })
       return false
     }
 
     plugin.enabled = false
+    logger.info('Plugin disabled', { id })
     return true
   }
 
   async shutdownAllPlugins(): Promise<void> {
+    logger.info('Shutting down all plugins', { count: this.plugins.length })
+
     for (const plugin of this.plugins) {
       if (plugin.shutdown) {
         try {
           await plugin.shutdown()
+          logger.debug('Plugin shutdown', { id: plugin.id })
         } catch (error) {
-          console.error(`[PluginManager] Error shutting down plugin ${plugin.id}:`, error)
+          logger.error('Error shutting down plugin', error, { id: plugin.id })
         }
       }
+    }
+
+    logger.info('All plugins shutdown complete')
+  }
+
+  getStats(): {
+    total: number
+    enabled: number
+    disabled: number
+  } {
+    return {
+      total: this.plugins.length,
+      enabled: this.getEnabledPlugins().length,
+      disabled: this.plugins.filter(p => !p.enabled).length
     }
   }
 }
