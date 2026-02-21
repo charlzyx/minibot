@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label for the service -->
+    <key>Label</key>
+    <string>com.github.charlzyx.minibot</string>
+
+    <!-- Program arguments -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/opt/minibot/dist/index.js</string>
+    </array>
+
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/opt/minibot</string>
+
+    <!-- Run at load -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Keep alive - restart if it crashes -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NODE_ENV</key>
+        <string>production</string>
+        <key>PORT</key>
+        <string>18791</string>
+    </dict>
+
+    <!-- Standard output and error paths -->
+    <key>StandardOutPath</key>
+    <string>/opt/minibot/logs/minibot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/opt/minibot/logs/minibot.error.log</string>
+
+    <!-- Run as user (optional - remove to run as root) -->
+    <key>UserName</key>
+    <string>YOUR_USERNAME</string>
+
+    <!-- Process type (interactive vs background) -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Nice value (process priority, -20 to 20) -->
+    <key>Nice</key>
+    <integer>0</integer>
+</dict>
+</plist>

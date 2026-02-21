@@ -576,6 +576,115 @@ interface Config {
 }
 ```
 
+## 🚀 Deployment
+
+### Linux (Systemd)
+
+Minibot includes a systemd service file for auto-start on boot.
+
+#### Installation
+
+```bash
+# Build the project
+npm run build
+
+# Run the installation script
+sudo ./scripts/install-service.sh
+```
+
+The installation script will:
+- Create a dedicated `minibot` user and group
+- Install files to `/opt/minibot`
+- Set up the systemd service
+- Configure firewall rules (optional)
+- Start the service
+
+#### Service Management
+
+```bash
+# Start service
+sudo systemctl start minibot
+
+# Stop service
+sudo systemctl stop minibot
+
+# Restart service
+sudo systemctl restart minibot
+
+# Check status
+sudo systemctl status minibot
+
+# View logs
+sudo journalctl -u minibot -f
+```
+
+#### Uninstallation
+
+```bash
+sudo ./scripts/uninstall-service.sh
+```
+
+### macOS (launchd)
+
+Minibot includes a launchd plist file for auto-start on boot.
+
+#### Installation
+
+```bash
+# Build the project
+npm run build
+
+# Run the installation script
+sudo ./scripts/install-service-macos.sh
+```
+
+The installation script will:
+- Install files to `/opt/minibot`
+- Set up the launchd service
+- Configure the plist with your username
+- Create log directory
+- Start the service
+
+#### Service Management
+
+```bash
+# Load/start service
+sudo launchctl load /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+
+# Stop/unload service
+sudo launchctl unload /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+
+# Restart (unload then load)
+sudo launchctl unload /Library/LaunchDaemons/com.github.charlzyx.minibot.plist && \
+sudo launchctl load /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+
+# Check status
+launchctl list | grep minibot
+
+# View logs
+tail -f /opt/minibot/logs/minibot.log
+tail -f /opt/minibot/logs/minibot.error.log
+```
+
+#### Uninstallation
+
+```bash
+sudo ./scripts/uninstall-service-macos.sh
+```
+
+### Docker Deployment
+
+```dockerfile
+FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+RUN npm run build
+EXPOSE 18791
+CMD ["npm", "start"]
+```
+
 ## 🛠️ Security
 
 - **Workspace Isolation** - Restricted access to workspace directory

@@ -1,0 +1,36 @@
+[Unit]
+Description=Minibot AI Assistant
+Documentation=https://github.com/charlzyx/minibot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minibot
+Group=minibot
+WorkingDirectory=/opt/minibot
+Environment="NODE_ENV=production"
+Environment="PORT=18791"
+ExecStart=/usr/bin/node /opt/minibot/dist/index.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=minibot
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/minibot/workspace
+ReadWritePaths=/opt/minibot/sessions
+ReadWritePaths=/opt/minibot/memory
+ReadWritePaths=/opt/minibot/db
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
