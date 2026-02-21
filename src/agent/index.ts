@@ -90,26 +90,28 @@ export class Agent {
       iteration++
       logger.debug(`Iteration ${iteration}/${MAX_ITERATIONS}`)
 
-      const llmResult = await this.tools.llm.execute({
+      const llmToolResult = await this.tools.llm.execute({
         provider: config.provider.name,
         model: config.model.name,
         messages,
         tools: this.toolDefinitions
       })
 
+      const llmResult = llmToolResult.data
+
       logger.debug('LLM result received', {
-        toolCalls: llmResult.tool_calls?.length || 0,
+        toolCalls: llmResult.toolCalls?.length || 0,
         contentLength: llmResult.content?.length || 0
       })
 
-      if (llmResult.tool_calls && llmResult.tool_calls.length > 0) {
+      if (llmResult.toolCalls && llmResult.toolCalls.length > 0) {
         messages.push({
           role: 'assistant',
           content: llmResult.content || '',
-          tool_calls: llmResult.tool_calls
+          tool_calls: llmResult.toolCalls
         })
 
-        for (const toolCall of llmResult.tool_calls) {
+        for (const toolCall of llmResult.toolCalls) {
           const args = JSON.parse(toolCall.function.arguments)
           logger.debug(`Tool call: ${toolCall.function.name}`, { args })
 

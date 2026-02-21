@@ -162,7 +162,7 @@ app.post('/api/chat', async (c) => {
       platform,
       messageId: crypto.randomUUID(),
       history: history.map((h: ChatMessage) => ({ ...h, timestamp: h.timestamp || Date.now() })),
-      metadata: {}
+      metadata: { isMainGroup: true } // Web API 总是响应
     })
 
     return c.json({
@@ -198,7 +198,7 @@ app.get('/api/chat/stream', async (c) => {
           platform,
           messageId: crypto.randomUUID(),
           history: [],
-          metadata: {}
+          metadata: { isMainGroup: true } // Web API 总是响应
         })
 
         const encoder = new TextEncoder()
@@ -600,8 +600,11 @@ async function dev() {
   }, 1000)
 }
 
-// Auto-start if running directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Auto-start if running directly or via tsx
+const isMainModule = import.meta.url === `file://${process.argv[1]}` ||
+                       process.argv[1].endsWith('/src/index.ts')
+
+if (isMainModule) {
   start().catch(error => {
     logger.error('Failed to start server', error)
     process.exit(1)
