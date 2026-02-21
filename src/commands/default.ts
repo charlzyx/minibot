@@ -1,6 +1,9 @@
 import { Command } from './manager'
 import { getSessionManager } from '../session'
 import { ChildProcess } from 'child_process'
+import { createLogger } from '../utils'
+
+const logger = createLogger('DefaultCommands')
 
 export const defaultCommands: Command[] = [
   {
@@ -20,9 +23,10 @@ export const defaultCommands: Command[] = [
     handler: async (args, context) => {
       const sessionManager = getSessionManager()
       const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-      
+
       sessionManager.unload(sessionId)
-      
+
+      logger.debug('Session reset', { sessionId })
       return '✅ 会话已重置'
     }
   },
@@ -34,13 +38,13 @@ export const defaultCommands: Command[] = [
       const { getSkillManager } = await import('../skills')
       const skillManager = getSkillManager()
       const skills = skillManager.getEnabledSkills()
-      
+
       if (skills.length === 0) {
         return '📭 当前没有可用的技能'
       }
-      
+
       let output = '🎯 可用技能\n\n'
-      
+
       for (const skill of skills) {
         output += `**${skill.metadata.name}**\n`
         if (skill.metadata.description) {
@@ -51,7 +55,7 @@ export const defaultCommands: Command[] = [
         }
         output += '\n'
       }
-      
+
       return output
     }
   },
@@ -63,16 +67,16 @@ export const defaultCommands: Command[] = [
       const { getSkillManager } = await import('../skills')
       const skillManager = getSkillManager()
       const sessionManager = getSessionManager()
-      
+
       const skills = skillManager.getEnabledSkills()
       const sessions = sessionManager.getAllSessions()
-      
+
       let status = '📊 系统状态\n\n'
       status += `**技能数量**: ${skills.length}\n`
       status += `**会话数量**: ${sessions.length}\n`
       status += `**平台**: ${context.platform}\n`
       status += `**用户ID**: ${context.userId}\n`
-      
+
       return status
     }
   },
@@ -87,6 +91,8 @@ export const defaultCommands: Command[] = [
       const session = sessionManager.getOrCreate(sessionId)
       session.activeSkill = 'code-assistant'
       await sessionManager.save(session)
+
+      logger.info('Code assistant starting', { sessionId, args: args.join(' ') })
 
       let response = '🤖 **代码助手已启动**\n\n'
 
@@ -113,11 +119,11 @@ export const defaultCommands: Command[] = [
         }
 
         const onRegisterProcess = (proc: ChildProcess, containerName: string, groupFolder: string) => {
-          console.log(`[Container] 注册进程: ${containerName}`)
+          logger.debug('Container process registered', { containerName, groupFolder })
         }
 
-        const onOutput = async (output: any) => {
-          console.log(`[Container] 输出: ${JSON.stringify(output)}`)
+        const onOutput = async (output: Record<string, unknown>) => {
+          logger.debug('Container output', { output })
         }
 
         response += `🚀 正在启动容器...\n\n`
@@ -136,6 +142,7 @@ export const defaultCommands: Command[] = [
           response += `❌ 容器启动失败: ${result.error}\n\n`
         }
       } catch (error) {
+        logger.error('Code assistant error', error, { sessionId })
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
       }
 
@@ -156,7 +163,7 @@ export const defaultCommands: Command[] = [
     handler: async (args, context) => {
       const sessionManager = getSessionManager()
       const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-      
+
       const session = sessionManager.getOrCreate(sessionId)
       session.activeSkill = 'skill-creator'
       session.state = {
@@ -167,7 +174,9 @@ export const defaultCommands: Command[] = [
         }
       }
       await sessionManager.save(session)
-      
+
+      logger.info('Skill creator starting', { sessionId })
+
       return '🎨 **技能创建助手已启动**\n\n' +
         '我将帮助你创建一个自定义技能。请按照以下步骤操作：\n\n' +
         '1. 首先，告诉我技能的名称\n' +

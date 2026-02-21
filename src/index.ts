@@ -5,96 +5,97 @@ import dotenv from 'dotenv'
 import path from 'path'
 import fs from 'fs'
 
-dotenv.config()
-
-import { getConfigManager, closeConfigManager, Config, setCustomWorkspace, getWorkspace } from './config/manager'
+import { createLogger } from './utils'
+import { getConfigManager, closeConfigManager, setCustomWorkspace, getWorkspace } from './config/manager'
 import { Agent } from './agent'
-import { startFeishuWS, stopFeishuWS, getFeishuChannel, FeishuMessage } from './channels/feishu'
-import { getSessionManager, ChatMessage } from './session'
+import { startFeishuWS, stopFeishuWS, getFeishuChannel, type FeishuMessage } from './channels/feishu'
+import { getSessionManager, type ChatMessage } from './session'
 import { getSkillManager } from './skills'
 import { getPluginManager } from './plugins'
 import { getCommandManager, defaultCommands } from './commands'
 import { GroupQueue } from './group-queue'
 import { MessageProcessor } from './message-processor'
 import { startSchedulerLoop } from './task-scheduler'
-import { logger } from './logger'
 
+const logger = createLogger('Minibot')
+
+dotenv.config()
+
+// ============================================================================
+// Workspace Setup
+// ============================================================================
+
+function setupWorkspace(customWorkspace?: string): void {
+  const workspace = customWorkspace || '/tmp/minibot-workspace'
+  setCustomWorkspace(workspace)
+
+  logger.info('Workspace configured', { workspace })
+
+  // Create workspace directory structure
+  const directories = [
+    path.join(workspace, 'sessions'),
+    path.join(workspace, 'memory'),
+    path.join(workspace, 'workspaces'),
+    path.join(workspace, 'skills'),
+    path.join(workspace, 'db')
+  ]
+
+  for (const dir of directories) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true })
+      logger.debug('Directory created', { dir })
+    }
+  }
+}
+
+// Parse workspace from command line arguments
 const args = process.argv.slice(2)
 const workspaceArg = args.find(arg => arg.startsWith('--workspace='))
 if (workspaceArg) {
   const workspace = workspaceArg.split('=')[1]
-  setCustomWorkspace(workspace)
-  console.log(`[Config] Using custom workspace: ${workspace}`)
+  setupWorkspace(workspace)
 } else {
-  // 使用默认的工作目录
-  const defaultWorkspace = '/tmp/minibot-workspace'
-  setCustomWorkspace(defaultWorkspace)
-  console.log(`[Config] Using default workspace: ${defaultWorkspace}`)
+  setupWorkspace()
 }
 
 const workspace = getWorkspace()
-console.log(`[Config] Workspace: ${workspace}`)
 
-if (!fs.existsSync(workspace)) {
-  console.log(`[Config] Creating workspace directory: ${workspace}`)
-  fs.mkdirSync(workspace, { recursive: true })
-}
-
-const sessionsDir = path.join(workspace, 'sessions')
-if (!fs.existsSync(sessionsDir)) {
-  console.log(`[Config] Creating sessions directory: ${sessionsDir}`)
-  fs.mkdirSync(sessionsDir, { recursive: true })
-}
-
-const memoryDir = path.join(workspace, 'memory')
-if (!fs.existsSync(memoryDir)) {
-  console.log(`[Config] Creating memory directory: ${memoryDir}`)
-  fs.mkdirSync(memoryDir, { recursive: true })
-}
-
-const workspacesDir = path.join(workspace, 'workspaces')
-if (!fs.existsSync(workspacesDir)) {
-  console.log(`[Config] Creating workspaces directory: ${workspacesDir}`)
-  fs.mkdirSync(workspacesDir, { recursive: true })
-}
-
-const skillsDir = path.join(workspace, 'skills')
-if (!fs.existsSync(skillsDir)) {
-  console.log(`[Config] Creating skills directory: ${skillsDir}`)
-  fs.mkdirSync(skillsDir, { recursive: true })
-}
-
-const dbDir = path.join(workspace, 'db')
-if (!fs.existsSync(dbDir)) {
-  console.log(`[Config] Creating db directory: ${dbDir}`)
-  fs.mkdirSync(dbDir, { recursive: true })
-}
+// ============================================================================
+// Manager Initialization
+// ============================================================================
 
 const configManager = getConfigManager()
 
-const skillManager = getSkillManager()
-console.log('[SkillManager] Loading skills...')
-await skillManager.loadAllSkills()
-console.log(`[SkillManager] Loaded ${skillManager.getAllSkills().length} skills`)
+async function initializeManagers() {
+  // Skills
+  const skillManager = getSkillManager()
+  logger.info('Loading skills...')
+  await skillManager.loadAllSkills()
+  logger.info('Skills loaded', { count: skillManager.getAllSkills().length })
 
-const pluginManager = getPluginManager()
-console.log('[PluginManager] Loading plugins...')
-await pluginManager.loadAllPlugins()
-console.log(`[PluginManager] Loaded ${pluginManager.getAllPlugins().length} plugins`)
+  // Plugins
+  const pluginManager = getPluginManager()
+  logger.info('Loading plugins...')
+  await pluginManager.loadAllPlugins()
+  logger.info('Plugins loaded', { count: pluginManager.getAllPlugins().length })
 
-const commandManager = getCommandManager()
-commandManager.registerMany(defaultCommands)
-logger.info(`[CommandManager] Registered ${defaultCommands.length} commands`)
+  // Commands
+  const commandManager = getCommandManager()
+  commandManager.registerMany(defaultCommands)
+  logger.info('Commands registered', { count: defaultCommands.length })
+}
 
-// 初始化 GroupQueue 和 MessageProcessor
+// ============================================================================
+// Message Processing Setup
+// ============================================================================
+
 const queue = new GroupQueue()
 const sessions: Record<string, string> = {}
-const registeredGroups: Record<string, any> = {}
+const registeredGroups: Record<string, Record<string, unknown>> = {}
 
 const messageProcessor = new MessageProcessor({
   sendMessage: async (jid, text) => {
-    // 这里需要根据实际的消息发送逻辑实现
-    logger.info({ jid, text: text.substring(0, 100) }, 'Sending message')
+    logger.info('Sending message', { jid, textLength: text?.length || 0 })
   },
   registeredGroups: () => registeredGroups,
   getSessions: () => sessions,
@@ -104,7 +105,7 @@ const messageProcessor = new MessageProcessor({
   }
 })
 
-// 初始化任务调度器
+// Task scheduler
 const scheduler = startSchedulerLoop({
   registeredGroups: () => registeredGroups,
   getSessions: () => sessions,
@@ -113,10 +114,13 @@ const scheduler = startSchedulerLoop({
     queue.registerProcess(groupJid, proc, containerName, groupFolder)
   },
   sendMessage: async (jid, text) => {
-    // 这里需要根据实际的消息发送逻辑实现
-    logger.info({ jid, text: text.substring(0, 100) }, 'Sending message from task scheduler')
+    logger.info('Sending message from task scheduler', { jid, textLength: text?.length || 0 })
   }
 })
+
+// ============================================================================
+// HTTP Server Setup
+// ============================================================================
 
 const app = new Hono()
 
@@ -129,11 +133,12 @@ app.use('*', cors({
 app.get('/health', (c) => {
   return c.json({
     status: 'ok',
-    version: '1.0.0',
+    version: '2.0.0',
     timestamp: new Date().toISOString()
   })
 })
 
+// Config endpoints
 app.get('/api/config', async (c) => {
   const config = await configManager.loadConfig()
   return c.json(config)
@@ -145,26 +150,27 @@ app.post('/api/config', async (c) => {
   return c.json({ success: true })
 })
 
+// Chat endpoints
 app.post('/api/chat', async (c) => {
   const body = await c.req.json()
   const { message, userId = 'anonymous', platform = 'web', history = [] } = body
-  
+
   try {
     const response = await messageProcessor.processMessage({
       userMessage: message,
       userId,
       platform,
       messageId: crypto.randomUUID(),
-      history: history.map((h: any) => ({ ...h, timestamp: h.timestamp || Date.now() })),
+      history: history.map((h: ChatMessage) => ({ ...h, timestamp: h.timestamp || Date.now() })),
       metadata: {}
     })
-    
+
     return c.json({
       response: response || '消息已接收并存储为上下文',
       success: true
     })
   } catch (error) {
-    logger.error({ error }, 'Error processing chat message')
+    logger.error('Error processing chat message', error)
     return c.json({
       response: '抱歉，我遇到了一些问题。',
       success: false,
@@ -173,12 +179,51 @@ app.post('/api/chat', async (c) => {
   }
 })
 
+app.get('/api/chat/stream', async (c) => {
+  const { message } = c.req.query()
+  const { userId = 'anonymous', platform = 'web' } = c.req.query()
+
+  const headers = new Headers({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  })
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const response = await messageProcessor.processMessage({
+          userMessage: message,
+          userId,
+          platform,
+          messageId: crypto.randomUUID(),
+          history: [],
+          metadata: {}
+        })
+
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(response || '消息已接收并存储为上下文')}\n\n`))
+
+        controller.close()
+      } catch (error) {
+        logger.error('Error processing streaming chat message', error)
+        const encoder = new TextEncoder()
+        controller.enqueue(encoder.encode(`event: error\ndata: ${error instanceof Error ? error.message : String(error)}\n\n`))
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, { headers })
+})
+
+// Memory endpoints
 app.get('/api/memory', async (c) => {
   const { query, limit, tag } = c.req.query()
-  
-  const { getMemoryManager, closeMemoryManager } = await import('./memory/manager')
+
+  const { getMemoryManager } = await import('./memory/manager')
   const memoryManager = getMemoryManager()
-  
+
   if (query) {
     const memories = await memoryManager.search(query, limit ? parseInt(limit) : 10)
     return c.json({ memories })
@@ -195,9 +240,9 @@ app.post('/api/memory', async (c) => {
   const body = await c.req.json()
   const { getMemoryManager } = await import('./memory/manager')
   const memoryManager = getMemoryManager()
-  
+
   const id = await memoryManager.store(body.content, body.tags || [])
-  
+
   return c.json({
     id,
     success: true
@@ -208,34 +253,35 @@ app.delete('/api/memory/:id', async (c) => {
   const { id } = c.req.param()
   const { getMemoryManager } = await import('./memory/manager')
   const memoryManager = getMemoryManager()
-  
+
   await memoryManager.delete(parseInt(id))
-  
+
   return c.json({ success: true })
 })
 
+// Tools endpoints
 app.get('/api/tools', async (c) => {
   const { getTools } = await import('./tools/index')
   const tools = getTools()
-  
+
   return c.json(Object.values(tools))
 })
 
 app.post('/api/tools/:name', async (c) => {
   const { name } = c.req.param()
   const body = await c.req.json()
-  
+
   const { getTools } = await import('./tools/index')
   const tools = getTools()
   const tool = tools[name]
-  
+
   if (!tool) {
     return c.json({ error: `Tool ${name} not found` }, 404)
   }
-  
+
   try {
     const result = await tool.execute(body.params || {})
-    
+
     return c.json({
       result,
       success: true
@@ -248,10 +294,11 @@ app.post('/api/tools/:name', async (c) => {
   }
 })
 
+// Skills endpoints
 app.get('/api/skills', async (c) => {
   const { getSkillManager } = await import('./skills')
   const skillManager = getSkillManager()
-  
+
   return c.json({
     skills: skillManager.getAllSkills(),
     count: skillManager.getAllSkills().length
@@ -262,13 +309,13 @@ app.get('/api/skills/:id', async (c) => {
   const { id } = c.req.param()
   const { getSkillManager } = await import('./skills')
   const skillManager = getSkillManager()
-  
+
   const skill = skillManager.getSkill(id)
-  
+
   if (!skill) {
     return c.json({ error: `Skill ${id} not found` }, 404)
   }
-  
+
   return c.json(skill)
 })
 
@@ -276,14 +323,14 @@ app.post('/api/skills', async (c) => {
   const body = await c.req.json()
   const { getSkillManager } = await import('./skills')
   const skillManager = getSkillManager()
-  
+
   try {
     const filePath = await skillManager.createSkill(
       body.name,
       body.content,
       body.metadata || {}
     )
-    
+
     return c.json({
       success: true,
       filePath
@@ -300,21 +347,21 @@ app.delete('/api/skills/:id', async (c) => {
   const { id } = c.req.param()
   const { getSkillManager } = await import('./skills')
   const skillManager = getSkillManager()
-  
+
   const success = await skillManager.deleteSkill(id)
-  
+
   if (!success) {
     return c.json({ error: `Skill ${id} not found` }, 404)
   }
-  
+
   return c.json({ success: true })
 })
 
-// Plugin management endpoints
+// Plugin endpoints
 app.get('/api/plugins', async (c) => {
   const { getPluginManager } = await import('./plugins')
   const pluginManager = getPluginManager()
-  
+
   return c.json({
     plugins: pluginManager.getAllPlugins(),
     count: pluginManager.getAllPlugins().length
@@ -325,13 +372,13 @@ app.get('/api/plugins/:id', async (c) => {
   const { id } = c.req.param()
   const { getPluginManager } = await import('./plugins')
   const pluginManager = getPluginManager()
-  
+
   const plugin = pluginManager.getPlugin(id)
-  
+
   if (!plugin) {
     return c.json({ error: `Plugin ${id} not found` }, 404)
   }
-  
+
   return c.json(plugin)
 })
 
@@ -340,10 +387,10 @@ app.post('/api/plugins/:id/config', async (c) => {
   const body = await c.req.json()
   const { getPluginManager } = await import('./plugins')
   const pluginManager = getPluginManager()
-  
+
   try {
     await pluginManager.savePluginConfig(id, body)
-    
+
     return c.json({
       success: true
     })
@@ -359,13 +406,13 @@ app.post('/api/plugins/:id/enable', async (c) => {
   const { id } = c.req.param()
   const { getPluginManager } = await import('./plugins')
   const pluginManager = getPluginManager()
-  
+
   const success = await pluginManager.enablePlugin(id)
-  
+
   if (!success) {
     return c.json({ error: `Plugin ${id} not found` }, 404)
   }
-  
+
   return c.json({ success: true })
 })
 
@@ -373,52 +420,14 @@ app.post('/api/plugins/:id/disable', async (c) => {
   const { id } = c.req.param()
   const { getPluginManager } = await import('./plugins')
   const pluginManager = getPluginManager()
-  
+
   const success = await pluginManager.disablePlugin(id)
-  
+
   if (!success) {
     return c.json({ error: `Plugin ${id} not found` }, 404)
   }
-  
-  return c.json({ success: true })
-})
 
-app.get('/api/chat/stream', async (c) => {
-  const { message } = c.req.query()
-  const { userId = 'anonymous', platform = 'web' } = c.req.query()
-  
-  const headers = new Headers({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  })
-  
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        const response = await messageProcessor.processMessage({
-          userMessage: message,
-          userId,
-          platform,
-          messageId: crypto.randomUUID(),
-          history: [],
-          metadata: {}
-        })
-        
-        const encoder = new TextEncoder()
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(response || '消息已接收并存储为上下文')}\n\n`))
-        
-        controller.close()
-      } catch (error) {
-        logger.error({ error }, 'Error processing streaming chat message')
-        const encoder = new TextEncoder()
-        controller.enqueue(encoder.encode(`event: error\ndata: ${error instanceof Error ? error.message : String(error)}\n\n`))
-        controller.close()
-      }
-    },
-  })
-  
-  return new Response(stream, { headers })
+  return c.json({ success: true })
 })
 
 app.notFound((c) => {
@@ -426,151 +435,161 @@ app.notFound((c) => {
 })
 
 app.onError((err, c) => {
-  console.error('Server error:', err)
-  
+  logger.error('Server error', err)
   return c.json({
     error: err.message || 'Internal Server Error',
     success: false
   }, 500)
 })
 
-process.on('SIGINT', async () => {
-  logger.info('Shutting down gracefully...')
-  stopFeishuWS()
-  
-  // 关闭插件
-  const pluginManager = getPluginManager()
-  await pluginManager.shutdownAllPlugins()
-  
-  // 关闭消息处理器和队列
-  await messageProcessor.shutdown(10000)
-  
-  configManager?.close()
-  process.exit(0)
-})
-
-process.on('SIGTERM', async () => {
-  logger.info('Shutting down gracefully...')
-  stopFeishuWS()
-  
-  // 关闭插件
-  const pluginManager = getPluginManager()
-  await pluginManager.shutdownAllPlugins()
-  
-  // 关闭消息处理器和队列
-  await messageProcessor.shutdown(10000)
-  
-  configManager?.close()
-  process.exit(0)
-})
+// ============================================================================
+// Feishu WebSocket Initialization
+// ============================================================================
 
 async function initializeFeishuWS() {
   try {
     const config = await configManager.loadConfig()
-    console.log('[Debug] Loaded config:', JSON.stringify(config, null, 2))
-    const feishuConfig = config.channels.feishu
-    
-    if (feishuConfig.enabled && feishuConfig.appId && feishuConfig.appSecret) {
-      console.log('[Feishu] Starting WebSocket connection...')
-      
-      startFeishuWS({
-        appId: feishuConfig.appId,
-        appSecret: feishuConfig.appSecret,
-        encryptKey: feishuConfig.encryptKey,
-        verificationToken: feishuConfig.verificationToken,
-        allowFrom: feishuConfig.allowFrom
-      }, async (message: FeishuMessage) => {
-        const userId = message.sender_id?.open_id || ''
-        const content = message.content
-        const messageId = message.message_id
-        const chatId = message.chat_id
-        const chatType = message.msg_type
-        
-        console.log('========================================')
-        console.log('[Feishu] 📥 Received Message:')
-        console.log(`  User ID: ${userId}`)
-        console.log(`  Chat ID: ${chatId}`)
-        console.log(`  Message: ${content}`)
-        console.log(`  Message ID: ${messageId}`)
-        console.log(`  Chat Type: ${chatType}`)
-        console.log(`  Time: ${new Date().toISOString()}`)
-        console.log('========================================')
-        
-        const { getMemoryManager } = await import('./memory/manager')
-        const memoryManager = getMemoryManager()
-        
-        await memoryManager.store(
-          JSON.stringify({ userId, content, messageId }),
-          ['feishu', 'message', messageId]
-        )
-        
-        const sessionManager = getSessionManager()
-        const sessionId = chatType === 'group' ? `feishu:${chatId}` : `feishu:${userId}`
-        
-        if (userId && content) {
-          try {
-            logger.info('[Feishu] Getting Feishu channel...')
-            const feishuChannel = getFeishuChannel({
-              appId: feishuConfig.appId,
-              appSecret: feishuConfig.appSecret,
-              encryptKey: feishuConfig.encryptKey,
-              verificationToken: feishuConfig.verificationToken,
-              allowFrom: feishuConfig.allowFrom
-            })
-            
-            logger.info('[Feishu] Processing with MessageProcessor...')
-            const response = await messageProcessor.processMessage({
-              userMessage: content,
-              userId,
-              platform: 'feishu',
-              messageId,
-              sessionId,
-              history: sessionManager.getMessages(sessionId, 20),
-              metadata: { chatId, chatType }
-            })
-            
-            if (response) {
-              logger.info({ message: '[Feishu] Response received:', response: response.substring(0, 100) })
-              logger.info('[Feishu] Sending reply...')
-              await feishuChannel.replyMessage(messageId, response, false)
-              logger.info('[Feishu] Reply sent successfully!')
-            } else {
-              logger.info('[Feishu] Message stored as context, no immediate reply needed')
-            }
-          } catch (error) {
-            logger.error({ message: '[Feishu] Failed to reply:', error })
-          }
-        } else {
-          logger.info({ message: '[Feishu] Skipping message - userId or content missing:', userId: !!userId, content: !!content })
-        }
-      })
-      
-      console.log('[Feishu] WebSocket initialization completed')
-    } else {
-      console.log('[Feishu] Not enabled or missing credentials:', {
-        enabled: feishuConfig.enabled,
-        appId: feishuConfig.appId,
-        appSecret: feishuConfig.appSecret
-      })
+    const feishuConfig = config.channels?.feishu
+
+    if (!feishuConfig || !feishuConfig.enabled) {
+      logger.info('Feishu not enabled')
+      return
     }
+
+    if (!feishuConfig.appId || !feishuConfig.appSecret) {
+      logger.warn('Feishu credentials missing', {
+        hasAppId: !!feishuConfig.appId,
+        hasAppSecret: !!feishuConfig.appSecret
+      })
+      return
+    }
+
+    logger.info('Starting Feishu WebSocket connection...')
+
+    startFeishuWS({
+      appId: feishuConfig.appId,
+      appSecret: feishuConfig.appSecret,
+      encryptKey: feishuConfig.encryptKey,
+      verificationToken: feishuConfig.verificationToken,
+      allowFrom: feishuConfig.allowFrom
+    }, async (message: FeishuMessage) => {
+      const userId = message.sender_id?.open_id || ''
+      const content = message.content
+      const messageId = message.message_id
+      const chatId = message.chat_id
+      const chatType = message.msg_type
+
+      logger.info('Feishu message received', {
+        userId,
+        chatId,
+        messageId,
+        chatType,
+        contentLength: content?.length || 0
+      })
+
+      const { getMemoryManager } = await import('./memory/manager')
+      const memoryManager = getMemoryManager()
+
+      await memoryManager.store(
+        JSON.stringify({ userId, content, messageId }),
+        ['feishu', 'message', messageId]
+      )
+
+      const sessionManager = getSessionManager()
+      const sessionId = chatType === 'group' ? `feishu:${chatId}` : `feishu:${userId}`
+
+      if (userId && content) {
+        try {
+          const feishuChannel = getFeishuChannel({
+            appId: feishuConfig.appId,
+            appSecret: feishuConfig.appSecret,
+            encryptKey: feishuConfig.encryptKey,
+            verificationToken: feishuConfig.verificationToken,
+            allowFrom: feishuConfig.allowFrom
+          })
+
+          const response = await messageProcessor.processMessage({
+            userMessage: content,
+            userId,
+            platform: 'feishu',
+            messageId,
+            sessionId,
+            history: sessionManager.getMessages(sessionId, 20),
+            metadata: { chatId, chatType }
+          })
+
+          if (response) {
+            logger.info('Sending Feishu reply', { messageId, responseLength: response.length })
+            await feishuChannel.replyMessage(messageId, response, false)
+            logger.info('Feishu reply sent successfully', { messageId })
+          } else {
+            logger.debug('Message stored as context, no immediate reply needed', { messageId })
+          }
+        } catch (error) {
+          logger.error('Failed to process Feishu message', error, { messageId })
+        }
+      } else {
+        logger.debug('Skipping Feishu message - missing userId or content', { userId, hasContent: !!content })
+      }
+    })
+
+    logger.info('Feishu WebSocket initialization completed')
   } catch (error) {
-    console.error('[Feishu] Failed to initialize WebSocket:', error)
+    logger.error('Failed to initialize Feishu WebSocket', error)
   }
 }
 
-const port = process.env.PORT || 18791
-logger.info(`🚀 Minibot server starting on port ${port}`)
+// ============================================================================
+// Shutdown Handlers
+// ============================================================================
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  serve({ 
-    fetch: app.fetch, 
-    port: Number(port) 
-  })
-  
-  setTimeout(() => {
-    initializeFeishuWS()
-  }, 1000)
+async function shutdown(signal: string) {
+  logger.info('Shutting down gracefully...', { signal })
+
+  stopFeishuWS()
+
+  const pluginManager = getPluginManager()
+  await pluginManager.shutdownAllPlugins()
+
+  await messageProcessor.shutdown(10000)
+
+  configManager?.close()
+
+  logger.info('Shutdown complete')
+  process.exit(0)
 }
+
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+
+// ============================================================================
+// Server Startup
+// ============================================================================
+
+const port = process.env.PORT || 18791
+
+async function start() {
+  await initializeManagers()
+
+  logger.info(`🚀 Minibot server starting on port ${port}`)
+
+  if (import.meta.url === `file://${process.argv[1]}`) {
+    serve({
+      fetch: app.fetch,
+      port: Number(port)
+    })
+
+    // Initialize Feishu after a short delay
+    setTimeout(() => {
+      initializeFeishuWS()
+    }, 1000)
+  }
+}
+
+start().catch(error => {
+  logger.error('Failed to start server', error)
+  process.exit(1)
+})
 
 export default {
   port,
