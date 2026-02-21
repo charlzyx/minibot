@@ -515,7 +515,7 @@ async function initializeFeishuWS() {
             messageId,
             sessionId,
             history: sessionManager.getMessages(sessionId, 20),
-            metadata: { chatId, chatType }
+            metadata: { chatId, chatType, isMainGroup: true } // 飞书总是响应
           })
 
           if (response) {

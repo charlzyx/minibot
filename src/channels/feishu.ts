@@ -286,7 +286,7 @@ async function processMessageQueue(): Promise<void> {
   if (messageQueue.isProcessing()) {
     logger.debug('Queue already being processed, will check later')
     setTimeout(() => {
-      if (!messageQueue.isEmpty()) {
+      if (!messageQueue.isEmpty) {
         processMessageQueue()
       }
     }, 100)
@@ -299,7 +299,7 @@ async function processMessageQueue(): Promise<void> {
   try {
     let processedCount = 0
 
-    while (!messageQueue.isEmpty()) {
+    while (!messageQueue.isEmpty) {
       const task = messageQueue.shiftTask()
       if (task) {
         try {
@@ -351,7 +351,7 @@ async function processMessageQueue(): Promise<void> {
   } finally {
     messageQueue.setProcessing(false)
 
-    if (!messageQueue.isEmpty()) {
+    if (!messageQueue.isEmpty) {
       logger.debug('New messages in queue, processing again...')
       setTimeout(processMessageQueue, 0)
     } else {
@@ -447,8 +447,8 @@ export function startFeishuWS(
             if (messageHandler) {
               const replyTo = chatType === 'group' ? chatId : userOpenId
 
-              await feishuChannel.addReaction(messageId, 'GET')
-              logger.debug('Added GET reaction', { messageId })
+              // Note: 'GET' is not a valid emoji_type, removed
+              logger.debug('Processing message', { messageId })
 
               const feishuMessage: FeishuMessage = {
                 message_id: messageId,
