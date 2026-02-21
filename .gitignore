@@ -48,4 +48,6 @@ dist/
 Thumbs.db
 
 # Temporary files
+tmp/
+*.tmp
 test.txt
