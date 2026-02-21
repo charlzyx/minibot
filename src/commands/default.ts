@@ -1,6 +1,5 @@
 import { Command } from './manager'
 import { getSessionManager } from '../session'
-import { ChildProcess } from 'child_process'
 import { createLogger } from '../utils'
 
 const logger = createLogger('DefaultCommands')
@@ -96,21 +95,17 @@ export const defaultCommands: Command[] = [
 
       let response = '🤖 **代码助手已启动**\n\n'
 
-      if (args.length > 0) {
-        const task = args.join(' ')
-        response += `任务: ${task}\n\n`
-      }
+      const task = args.length > 0 ? args.join(' ') : 'info'
+
+      response += `📦 任务: ${task}\n\n`
 
       // 在独立容器中运行
       try {
         const { runCodeAssistant } = await import('../container-runner-docker')
 
-        const task = args.length > 0 ? args.join(' ') : '准备就绪，等待指令'
+        logger.info('Starting code assistant container', { sessionId, task })
 
         response += `🚀 正在启动独立容器...\n\n`
-        response += `📦 任务: ${task}\n\n`
-
-        logger.info('Starting code assistant container', { sessionId, task })
 
         const result = await runCodeAssistant({
           prompt: task,
@@ -121,11 +116,7 @@ export const defaultCommands: Command[] = [
             memoryLimit: '512m',
             timeout: 60000
           },
-          onRegisterProcess: (containerId, containerName) => {
-            logger.info('Container registered', { containerId, containerName })
-            response += `🆔 容器 ID: ${containerId}\n\n`
-          },
-          onOutput: async (output) => {
+          async onOutput(output) {
             logger.info('Container output received', { status: output.status })
             if (output.status === 'success') {
               response += `✅ 执行成功！\n\n`
@@ -150,13 +141,6 @@ export const defaultCommands: Command[] = [
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
         response += `💡 提示: 请确保 Docker 已安装并运行\n\n`
       }
-
-      response += `我现在可以帮助你完成以下任务：\n\n`
-      response += `- 💻 编写和调试代码\n`
-      response += `- 🐳 在容器中运行代码\n`
-      response += `- 🔧 代码审查和重构\n\n`
-      response += `我会及时反馈执行状态，遇到问题立即通知。\n\n`
-      response += `请告诉我你需要什么帮助！`
 
       return response
     }

@@ -173,7 +173,7 @@ export class DockerContainerRunner {
    */
   private buildDockerConfig(
     containerName: string,
-    _workspaceDir: string,
+    workspaceDir: string,
     inputDataDir: string,
     _outputDataDir: string,
     options: ContainerOptions
@@ -182,23 +182,30 @@ export class DockerContainerRunner {
     const memoryLimit = parseInt(options.memoryLimit || this.DEFAULT_MEMORY) * 1024 * 1024
     const cpuQuota = options.cpuLimit ? parseInt(options.cpuLimit) * 10000 : this.DEFAULT_CPU_QUOTA
 
+    // Create workspace directory
+    fs.mkdirSync(path.join(workspaceDir, 'workspace'), { recursive: true })
+
     // 准备容器内的代码执行脚本
     const scriptPath = path.join(inputDataDir, 'script.js')
     fs.writeFileSync(scriptPath, this.generateContainerScript())
 
+    const binds: { source: string; target: string }[] = [
+      { source: inputDataDir, target: '/workspace/input:ro' },
+      { source: path.join(workspaceDir, 'workspace'), target: '/workspace/workspace:rw' }
+    ]
+
     return {
       name: containerName,
       image: imageName,
-      cmd: ['node', '/workspace/script.js'],
+      cmd: ['node', '/workspace/input/script.js'],
       workingDir: '/workspace',
       env: {
         NODE_ENV: 'production',
         MINIBOT_CONTAINER: 'true',
-        CONTAINER_NAME: containerName
+        CONTAINER_NAME: containerName,
+        WORKSPACE_DIR: '/workspace/workspace'
       },
-      binds: [
-        { source: inputDataDir, target: '/workspace/input:ro' }
-      ],
+      binds,
       autoRemove: true,
       networkDisabled: options.networkMode !== 'host',
       memory: memoryLimit,
@@ -210,11 +217,14 @@ export class DockerContainerRunner {
   /**
    * 生成容器内执行脚本
    * 使用 stdout 输出和 sentinel markers（参考 nanoclaw）
+   *
+   * 功能：执行简单的代码任务并返回结果
    */
   private generateContainerScript(): string {
     return `
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
 // Sentinel markers for output parsing
 const OUTPUT_START_MARKER = '${OUTPUT_START_MARKER}';
@@ -228,6 +238,148 @@ function writeOutput(output) {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
+}
+
+/**
+ * Execute a shell command and return the result
+ */
+function executeCommand(command, args = [], cwd = '/workspace') {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    const timeout = 30000; // 30 seconds
+
+    const proc = spawn(command, args, {
+      cwd,
+      stdio: 'pipe',
+      timeout
+    });
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      resolve({
+        exitCode: code,
+        stdout: stdout.trim(),
+        stderr: stderr.trim()
+      });
+    });
+
+    proc.on('error', (error) => {
+      reject(error);
+    });
+  });
+}
+
+/**
+ * Analyze the prompt and determine what action to take
+ */
+function analyzePrompt(prompt) {
+  const lowerPrompt = prompt.toLowerCase();
+
+  // Check if it's a code execution request
+  if (lowerPrompt.includes('run') || lowerPrompt.includes('execute') || lowerPrompt.includes('exec')) {
+    // Extract command (simple heuristic)
+    const match = prompt.match(/(?:run|execute|exec)\\s+(.+)/i);
+    if (match) {
+      return { type: 'execute', command: match[1] };
+    }
+  }
+
+  // Check if it's a file operation
+  if (lowerPrompt.includes('create') || lowerPrompt.includes('write') || lowerPrompt.includes('save')) {
+    const match = prompt.match(/(?:create|write|save)\\s+(?:file\\s+)?(.+?)\\s+(?:with|content)?\\s*(.+)/i);
+    if (match) {
+      return { type: 'write', filename: match[1], content: match[2] };
+    }
+  }
+
+  // Check if it's a read operation
+  if (lowerPrompt.includes('read') || lowerPrompt.includes('show') || lowerPrompt.includes('cat')) {
+    const match = prompt.match(/(?:read|show|cat)\\s+(.+)/i);
+    if (match) {
+      return { type: 'read', filename: match[1] };
+    }
+  }
+
+  // Default to informational response
+  return { type: 'info' };
+}
+
+/**
+ * Execute the analyzed action
+ */
+async function executeAction(action, prompt) {
+  const workspaceDir = '/workspace';
+
+  switch (action.type) {
+    case 'execute': {
+      log('Executing command: ' + action.command);
+      const parts = action.command.split(' ');
+      const cmd = parts[0];
+      const args = parts.slice(1);
+
+      const result = await executeCommand(cmd, args, workspaceDir);
+      return {
+        status: result.exitCode === 0 ? 'success' : 'error',
+        result: result.stdout || 'Command executed',
+        error: result.stderr || (result.exitCode !== 0 ? \`Exit code: \${result.exitCode}\` : undefined)
+      };
+    }
+
+    case 'write': {
+      log('Writing file: ' + action.filename);
+      const filepath = path.join(workspaceDir, action.filename);
+      fs.writeFileSync(filepath, action.content, 'utf8');
+      return {
+        status: 'success',
+        result: \`File \${action.filename} created successfully\`
+      };
+    }
+
+    case 'read': {
+      log('Reading file: ' + action.filename);
+      const filepath = path.join(workspaceDir, action.filename);
+
+      if (!fs.existsSync(filepath)) {
+        return {
+          status: 'error',
+          error: \`File not found: \${action.filename}\`
+        };
+      }
+
+      const content = fs.readFileSync(filepath, 'utf8');
+      return {
+        status: 'success',
+        result: content
+      };
+    }
+
+    case 'info': {
+      // List workspace contents
+      const files = fs.readdirSync(workspaceDir).filter(f => {
+        const stat = fs.statSync(path.join(workspaceDir, f));
+        return stat.isFile()
+      });
+
+      return {
+        status: 'success',
+        result: \`Minibot Code Assistant\\n\\nWorkspace: \${workspaceDir}\\nFiles: \${files.length}\\n\\nAvailable commands:\\n- run <command>\\n- create file <filename> with <content>\\n- read <filename>\\n\\nYour request: \${prompt}\`
+      };
+    }
+
+    default:
+      return {
+        status: 'error',
+        error: 'Unknown action type'
+      };
+  }
 }
 
 async function main() {
@@ -248,14 +400,24 @@ async function main() {
   }
 
   try {
-    // TODO: 这里可以集成实际的 LLM 调用或 Claude Agent SDK
-    // 目前使用简单的响应作为示例
-    const result = 'Code assistant response for: ' + input.prompt;
+    // Create workspace directory
+    const workspaceDir = '/workspace';
+    if (!fs.existsSync(workspaceDir)) {
+      fs.mkdirSync(workspaceDir, { recursive: true });
+    }
 
-    log('Task completed successfully');
+    // Analyze the prompt
+    const action = analyzePrompt(input.prompt);
+    log('Action type: ' + action.type);
+
+    // Execute the action
+    const result = await executeAction(action, input.prompt);
+
+    log('Task completed: ' + result.status);
     writeOutput({
-      status: 'success',
-      result: result,
+      status: result.status,
+      result: result.result,
+      error: result.error,
       newSessionId: 'session-' + Date.now()
     });
   } catch (err) {
