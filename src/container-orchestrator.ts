@@ -15,12 +15,12 @@
 import { spawn, ChildProcess } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { getWorkspace } from '../config/manager'
-import { createLogger } from '../utils'
-import { validateMount, AdditionalMount, initializeMountAllowlist } from '../mount-security'
-import { writeGroupsSnapshot, writeTasksSnapshot } from '../snapshot'
-import { getIPCManager, IPCMessage } from '../ipc'
-import { getGroupQueueManager, ProcessInfo } from '../group-queue'
+import { getWorkspace } from './config/index'
+import { createLogger } from './utils/index'
+import { validateMount, AdditionalMount, initializeMountAllowlist } from './mount-security'
+import { writeGroupsSnapshot, writeTasksSnapshot } from './snapshot'
+import { getIPCManager, IPCMessage } from './ipc'
+import { GroupQueue } from './group-queue'
 
 const logger = createLogger('ContainerOrchestrator')
 
@@ -55,7 +55,7 @@ export interface ContainerOrchestrationOptions {
  */
 export class ContainerOrchestrator {
   private dataDir: string
-  private queueManager = getGroupQueueManager()
+  private queueManager = new GroupQueue()
   private ipcManager = getIPCManager()
   private options: Required<ContainerOrchestrationOptions>
 

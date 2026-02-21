@@ -5,9 +5,6 @@ const logDir = process.env.LOG_DIR || '/tmp/minibot-logs'
 
 const baseLogger = pino({
   level: process.env.LOG_LEVEL || 'info',
-  formatters: {
-    level: (label) => ({ level: label })
-  },
   timestamp: pino.stdTimeFunctions.isoTime,
   transport: {
     targets: [
