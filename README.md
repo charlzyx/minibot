@@ -2,21 +2,38 @@
 
 > 🐈 Minimal AI assistant powered by Hono + TypeScript + Node
 
-Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with modern tech stack and enhanced with containerization capabilities.
+Inspired by [nanobot](https://github.com/hkuds/nanobot) and [nanoclaw](https://github.com/gavrielc/nanoclaw), reimplemented with modern tech stack and enhanced with containerization capabilities.
 
 ## ✨ Features
 
+### Core
 - 🚀 **Fast & Lightweight** - Hono framework for maximum performance
 - 🔒 **Type-Safe** - Full TypeScript coverage
 - 💾 **Persistent Memory** - SQLite + Markdown hybrid storage
 - 🗂️ **Session Management** - JSONL-based session isolation and persistence
 - 🔌 **Multiple LLM Providers** - Zhipu, OpenAI, DeepSeek, Dashscope, Qwen, etc.
-- 💬 **Multi-Platform** - Feishu with reply reference support
+
+### Tools & Skills
 - 🛠️ **Tool System** - Built-in tools with easy extension
+- 📚 **Skill System** - Markdown-based skills with YAML frontmatter
+- 🤖 **Subagent Architecture** - Distributed task execution
+
+### Container & Isolation
+- 🐳 **Docker Integration** - `/code` command runs in isolated containers
+- 🔒 **Mount Security** - Allowlist-based mount validation for containers
+- 📦 **Container Orchestration** - Lifecycle management and queue control
+- 📡 **IPC System** - Inter-process communication for containers
+- 📊 **Monitoring** - System metrics and health monitoring
+
+### Task Management
 - ⏰ **Scheduled Tasks** - Cron-based task execution with workspace isolation
-- 🤖 **Subagent Architecture** - Distributed task execution and load balancing
-- 🔍 **Error Handling** - Intelligent error classification and retry mechanisms
-- 🐳 **Docker Integration** - `/code` command runs in isolated containers with resource limits
+- 🔄 **Retry Mechanisms** - Intelligent error classification and retry
+- 📋 **Queue Management** - Concurrent execution with priority handling
+
+### Multi-Platform
+- 💬 **Feishu** - WebSocket integration with reply reference support
+- 🔔 **Auto Reaction** - Auto reacts to messages
+- 📝 **Card Messages** - Rich card message support
 
 ## 🏗️ Architecture
 
@@ -52,14 +69,17 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
                       │
                       ▼
 ┌────────────────────────────────────────────────┐
-│              Memory & Storage              │
-│              SQLite / Config                │
+│         Container Orchestration Layer       │
+│  ┌─────────────┐  ┌──────────────┐          │
+│  │   Docker    │  │   Queue      │          │
+│  │   Runner    │  │   Manager    │          │
+│  └─────────────┘  └──────────────┘          │
 └────────────────────────────────────────────────┘
                       │
-                      ↓
+                      ▼
 ┌────────────────────────────────────────────────┐
-│           Container Runner                 │
-│      Isolated agent execution             │
+│              Memory & Storage              │
+│         SQLite / Config / IPC               │
 └────────────────────────────────────────────────┘
 ```
 
@@ -67,32 +87,44 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 
 ```
 minibot/
-├── src/                    # 源代码目录
-│   ├── agent/              # Agent 核心逻辑
-│   ├── channels/           # 消息通道（飞书、微信等）
-│   ├── commands/           # 命令系统
-│   ├── config/             # 配置管理
-│   ├── container-runner.ts # 容器运行器
-│   ├── cron/               # 定时任务系统
-│   ├── group-queue.ts      # 组队列管理
-│   ├── index.ts            # 主入口文件
-│   ├── logger.ts           # 日志系统
-│   ├── message-processor.ts # 消息处理器
-│   ├── memory/             # 记忆管理
-│   ├── plugins/            # 插件系统
-│   ├── router.ts           # 消息路由器
-│   ├── session/            # 会话管理
-│   ├── skills/             # 技能系统
-│   ├── task-scheduler.ts   # 任务调度器
-│   ├── types/              # 类型定义
-│   ├── utils/              # 工具函数
-│   └── tools/              # 工具系统
-├── docs/                   # 文档目录
-├── tests/                  # 测试目录
-├── package.json          # 项目配置
-├── tsconfig.json        # TypeScript 配置
-├── README.md            # 项目说明
-└── USAGE.md             # 使用指南
+├── src/                          # 源代码目录
+│   ├── agent/                     # Agent 核心逻辑
+│   ├── channels/                  # 消息通道（飞书、微信等）
+│   ├── commands/                  # 命令系统
+│   │   ├── default.ts            # 默认命令
+│   │   └── manager.ts            # 命令管理器
+│   ├── config/                    # 配置管理
+│   ├── container-runner-docker.ts # Docker 容器运行器
+│   ├── container-orchestrator.ts  # 容器编排层
+│   ├── cron/                      # 定时任务系统
+│   ├── errors/                    # 错误处理
+│   ├── group-queue.ts             # 组队列管理
+│   ├── ipc.ts                     # 进程间通信
+│   ├── index.ts                   # 主入口文件
+│   ├── logger.ts                  # 日志系统
+│   ├── message-processor.ts       # 消息处理器
+│   ├── memory/                    # 记忆管理
+│   ├── monitoring.ts              # 系统监控
+│   ├── mount-security.ts           # 挂载安全
+│   ├── session/                   # 会话管理
+│   ├── skills/                    # 技能系统
+│   ├── snapshot.ts                # 快照系统
+│   ├── task-scheduler.ts          # 任务调度器
+│   ├── types/                     # 类型定义
+│   ├── utils/                     # 工具函数
+│   └── tools/                     # 工具系统
+├── container/                     # 容器相关
+│   └── Dockerfile                 # 容器镜像
+├── scripts/                       # 脚本
+│   ├── build-container.sh         # 构建容器镜像
+│   ├── install-service.sh         # Linux 安装脚本
+│   └── install-service-macos.sh   # macOS 安装脚本
+├── docs/                          # 文档目录
+├── tests/                         # 测试目录
+├── package.json                   # 项目配置
+├── tsconfig.json                 # TypeScript 配置
+├── README.md                      # 项目说明
+└── USAGE.md                       # 使用指南
 ```
 
 ## 🚀 Quick Start
@@ -287,9 +319,18 @@ Session module provides conversation history management with isolation.
 
 Commands module provides a command system for quick operations.
 
+**Available Commands**:
+- `/help` - Display available commands
+- `/reset` - Reset current session
+- `/skills` - List all available skills
+- `/status` - Display system status
+- `/code [task]` - Start code assistant in container
+- `/monitor` - Display detailed monitoring information
+- `/health` - Check system health status
+- `/mounts` - Show mount security status
+
 **Features**:
 - Slash command support (`/command`)
-- Built-in commands: `/help`, `/reset`, `/skills`, `/status`, `/code`
 - Extensible command registration
 - Command help generation
 - Error handling
