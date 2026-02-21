@@ -6,31 +6,37 @@
 minibot/
 ├── src/                    # 源代码目录
 │   ├── agent/              # Agent 核心逻辑
-│   ├── channels/           # 消息通道（飞书、微信等）
+│   ├── channels/           # 消息通道（飞书等）
 │   ├── commands/           # 命令系统
 │   ├── config/             # 配置管理
 │   ├── container-runner.ts # 容器运行器
 │   ├── cron/               # 定时任务系统
+│   ├── errors/             # 自定义错误类
 │   ├── group-queue.ts      # 组队列管理
 │   ├── index.ts            # 主入口文件
-│   ├── logger.ts           # 日志系统
 │   ├── message-processor.ts # 消息处理器
 │   ├── memory/             # 记忆管理
 │   ├── plugins/            # 插件系统
-│   ├── router.ts           # 消息路由器
 │   ├── session/            # 会话管理
 │   ├── skills/             # 技能系统
 │   ├── task-scheduler.ts   # 任务调度器
+│   ├── tools/              # 工具系统
 │   ├── types/              # 类型定义
-│   ├── utils/              # 工具函数
-│   └── tools/              # 工具系统
-├── docs/                   # 文档目录
+│   └── utils/              # 工具函数（日志、缓存等）
+├── scripts/                # 部署脚本
+│   ├── install-service.sh       # Linux 安装脚本
+│   ├── uninstall-service.sh     # Linux 卸载脚本
+│   ├── install-service-macos.sh # macOS 安装脚本
+│   └── uninstall-service-macos.sh # macOS 卸载脚本
 ├── tests/                  # 测试目录
-├── .env.example          # 环境变量模板
-├── package.json          # 项目配置
-├── tsconfig.json        # TypeScript 配置
-├── README.md            # 项目说明
-└── USAGE.md             # 使用指南
+│   └── unit/               # 单元测试
+├── .env.example            # 环境变量模板
+├── minibot.service         # systemd 服务文件
+├── com.github.charlzyx.minibot.plist # launchd 服务文件
+├── package.json            # 项目配置
+├── tsconfig.json           # TypeScript 配置
+├── README.md               # 项目说明
+└── USAGE.md                # 使用指南
 ```
 
 ## 快速开始
@@ -63,6 +69,9 @@ FEISHU_APP_SECRET=your_feishu_app_secret
 
 # Server
 PORT=18791
+
+# Optional: Session cache size (default: 500)
+MAX_SESSION_CACHE=500
 ```
 
 ### 3. 启动服务
@@ -72,9 +81,10 @@ PORT=18791
 npm run dev
 
 # 生产模式
+npm run build
 npm start
 
-# 生产模式（使用自定义工作区）
+# 使用自定义工作区
 npm start -- --workspace=/path/to/workspace
 ```
 
@@ -83,6 +93,15 @@ npm start -- --workspace=/path/to/workspace
 访问健康检查接口：
 ```bash
 curl http://localhost:18791/health
+```
+
+响应：
+```json
+{
+  "status": "ok",
+  "version": "2.0.0",
+  "timestamp": "2026-02-21T00:00:00.000Z"
+}
 ```
 
 ## 核心功能使用
@@ -100,6 +119,7 @@ Minibot 支持斜杠命令来快速执行特定操作。
 | `/skills` | 列出所有可用的技能 | `/skills` |
 | `/status` | 显示系统状态 | `/status` |
 | `/code` | 启动代码助手并在容器中执行任务 | `/code [任务描述]` |
+| `/skill-creator` | 创建自定义技能 | `/skill-creator` |
 
 #### 使用示例
 
@@ -119,26 +139,8 @@ Minibot 支持斜杠命令来快速执行特定操作。
 **/status** - 显示系统状态
   用法: /status
 
-**/code** - 学习 NanoClaw 并在容器中运行
+**/code** - 启动代码助手并在容器中执行任务
   用法: /code [任务描述]
-```
-
-```
-用户：/reset
-机器人：✅ 会话已重置
-```
-
-```
-用户：/skills
-机器人：🎯 可用技能
-
-**Weather Assistant**
-  帮助用户查询天气信息，提供天气预报和建议
-  标签: weather, information, daily
-
-**Code Reviewer**
-  帮助用户进行代码审查，提供改进建议和最佳实践
-  标签: code, review, development
 ```
 
 ```
@@ -151,8 +153,6 @@ Minibot 支持斜杠命令来快速执行特定操作。
 
 ✅ 容器启动成功！
 
-📦 容器输出: function parseJSON<T>(json: string): T { ... }
-
 我现在可以帮助你完成以下任务：
 
 - 💻 编写和调试代码
@@ -164,67 +164,7 @@ Minibot 支持斜杠命令来快速执行特定操作。
 请告诉我你需要什么帮助！
 ```
 
-### 2. 容器运行器
-
-容器运行器提供了一个隔离的执行环境，用于安全地运行代理。
-
-#### 功能特性
-
-- 容器系统检查
-- 代理在隔离容器中执行
-- 输出监控
-- IPC 通信
-- 当 Apple Container 系统不可用时，回退到模拟容器执行
-
-#### 使用方式
-
-通过 `/code` 命令使用容器运行器：
-
-```
-/code 编写一个排序算法
-```
-
-#### 编程使用
-
-```typescript
-import { runContainerAgent } from './src/container-runner'
-
-const group = {
-  folder: 'workspace',
-  name: 'Code Assistant Container'
-}
-
-const params = {
-  prompt: '编写一个排序算法',
-  sessionId: 'user:123',
-  groupFolder: 'workspace',
-  chatJid: 'user:123',
-  isMain: true
-}
-
-const onRegisterProcess = (proc, containerName, groupFolder) => {
-  console.log(`[Container] 注册进程: ${containerName}`)
-}
-
-const onOutput = async (output) => {
-  console.log(`[Container] 输出: ${JSON.stringify(output)}`)
-}
-
-const result = await runContainerAgent(
-  group,
-  params,
-  onRegisterProcess,
-  onOutput
-)
-
-if (result.status === 'success') {
-  console.log(`容器启动成功！输出: ${result.result}`)
-} else {
-  console.error(`容器启动失败: ${result.error}`)
-}
-```
-
-### 3. 技能系统
+### 2. 技能系统
 
 #### 技能文件格式
 
@@ -246,11 +186,11 @@ enabled: true
 
 #### 创建技能
 
-在 `skills/` 目录下创建 `.skill.md` 文件：
+在 `workspace/skills/` 目录下创建 `.skill.md` 文件：
 
 ```bash
 # 创建技能文件
-nano skills/my-skill.skill.md
+nano workspace/skills/my-skill.skill.md
 ```
 
 示例技能：
@@ -285,10 +225,6 @@ enabled: true
 助手：sin(30°) ≈ 0.5
 ```
 
-#### 技能自动加载
-
-启动 Minibot 时会自动加载 `skills/` 目录下的所有技能文件。
-
 #### REST API
 
 ```bash
@@ -313,7 +249,7 @@ POST /api/skills
 DELETE /api/skills/:id
 ```
 
-### 4. 飞书集成
+### 3. 飞书集成
 
 #### 配置
 
@@ -328,8 +264,9 @@ FEISHU_VERIFICATION_TOKEN=     # 可选
 #### 功能特性
 
 - ✅ WebSocket 实时通信
-- ✅ 消息去重
-- ✅ 自动表情回复（👍）
+- ✅ 消息去重（5分钟 TTL）
+- ✅ 自动表情回复（GET → THUMBSUP）
+- ✅ 批量消息处理
 - ✅ 回复引用
 - ✅ 卡片消息
 - ✅ 私聊和群聊支持
@@ -339,19 +276,28 @@ FEISHU_VERIFICATION_TOKEN=     # 可选
 
 启动服务后，飞书机器人会自动连接并接收消息。每个对话都有独立的会话历史。
 
-### 5. 会话管理
+### 4. 会话管理
 
 #### 会话隔离
 
 - **私聊**：`feishu:{userId}`（例如：`feishu:oc_xxxxxxxxxxxxx`）
 - **群聊**：`feishu:{chatId}`（例如：`feishu:oc_xxxxxxxxxxxxx`）
 
-每个会话都有独立的消息历史，存储在 `sessions/{key}.jsonl` 文件中。
+每个会话都有独立的消息历史，存储在 `workspace/sessions/{key}.jsonl` 文件中。
+
+#### 会话缓存（v2.0.0 新增）
+
+SessionManager 使用 LRU 缓存：
+- 默认最大缓存：500 个会话
+- 默认 TTL：30 分钟
+- 自动保存到磁盘
+
+可通过环境变量 `MAX_SESSION_CACHE` 调整缓存大小。
 
 #### 编程使用
 
 ```typescript
-import { getSessionManager } from './src/session'
+import { getSessionManager } from '@/session'
 
 const sessionManager = getSessionManager()
 
@@ -374,6 +320,10 @@ const lastTimestamp = sessionManager.getLastTimestamp('feishu:oc_xxx')
 // 保存会话
 await sessionManager.save(session)
 
+// 获取缓存统计
+const stats = sessionManager.getCacheStats()
+console.log(`Cache: ${stats.size}/${stats.maxSize} sessions`)
+
 // 列出所有会话
 const sessions = await sessionManager.listSessions()
 
@@ -381,7 +331,7 @@ const sessions = await sessionManager.listSessions()
 await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000)
 ```
 
-### 6. 记忆管理
+### 5. 记忆管理
 
 #### 存储策略
 
@@ -391,7 +341,7 @@ await sessionManager.cleanup(7 * 24 * 60 * 60 * 1000)
 #### 编程使用
 
 ```typescript
-import { getMemoryManager } from './src/memory'
+import { getMemoryManager } from '@/memory'
 
 const memoryManager = getMemoryManager()
 
@@ -430,11 +380,11 @@ await memoryManager.close()
 
 #### 记忆文件位置
 
-- SQLite 数据库：`db/memory.db`
-- 每日笔记：`memory/YYYY-MM-DD.md`
-- 长期记忆：`memory/MEMORY.md`
+- SQLite 数据库：`workspace/db/memory.db`
+- 每日笔记：`workspace/memory/YYYY-MM-DD.md`
+- 长期记忆：`workspace/memory/MEMORY.md`
 
-### 7. 工具系统
+### 6. 工具系统
 
 #### 可用工具
 
@@ -443,6 +393,12 @@ await memoryManager.close()
 - **web**：HTTP 请求
 - **llm**：LLM API 调用
 - **memory**：记忆操作
+
+#### 安全特性（v2.0.0）
+
+- **Shell 工具**：命令白名单验证、危险模式检测
+- **File 工具**：路径遍历保护
+- **Web 工具**：URL 验证、响应大小限制
 
 #### 工具调用
 
@@ -455,43 +411,6 @@ Agent：[调用 file.list 工具]
 Agent：当前目录包含以下文件：...
 ```
 
-### 8. 定时任务
-
-#### 快速开始
-
-```typescript
-import { CronScheduler, ErrorHandler } from './src/cron'
-
-const scheduler = new CronScheduler({
-  checkInterval: 1000,
-  workspaceBasePath: './workspaces',
-  enableSubagent: true
-})
-
-await scheduler.start()
-
-// 添加定时任务
-await scheduler.addJob({
-  name: 'Daily Backup',
-  cronExpression: '0 2 * * *',
-  command: 'bash',
-  args: ['scripts/backup.sh'],
-  enabled: true,
-  priority: ErrorHandler.getPriority('high'),
-  timeout: 600000,
-  maxRetries: 3
-})
-```
-
-#### Cron 表达式
-
-- `0 2 * * *` - 每天凌晨 2 点
-- `*/5 * * * *` - 每 5 分钟
-- `0 0 * * 0` - 每周日凌晨
-- `0 0 1 * *` - 每月 1 号凌晨
-- `0 9-17 * * 1-5` - 工作日 9-17 点每小时
-- `0 */30 * * * *` - 每 30 秒（6 段式）
-
 ## API 接口
 
 ### 健康检查
@@ -499,29 +418,6 @@ await scheduler.addJob({
 ```bash
 GET /health
 ```
-
-响应：
-```json
-{
-  "status": "ok",
-  "version": "1.0.0",
-  "timestamp": "2026-02-14T00:00:00.000Z"
-}
-```
-
-### 配置接口
-
-```bash
-GET /api/config
-```
-
-获取当前配置信息。
-
-```bash
-POST /api/config
-```
-
-更新配置信息。
 
 ### 聊天接口
 
@@ -539,221 +435,132 @@ POST /api/chat
 }
 ```
 
-响应：
-```json
-{
-  "response": "你好！有什么我可以帮助你的？",
-  "success": true
-}
+### 流式聊天
+
+```bash
+GET /api/chat/stream?message=你好&userId=user123
 ```
 
 ### 记忆接口
 
 ```bash
-GET /api/memory
-```
-
-获取记忆列表。
-
-```bash
+GET /api/memory?query=关键词&limit=10
+GET /api/memory?tag=feishu
 POST /api/memory
-```
-
-存储新记忆：
-```json
-{
-  "content": "记忆内容",
-  "tags": ["tag1", "tag2"]
-}
-```
-
-```bash
 DELETE /api/memory/:id
 ```
-
-删除指定记忆。
 
 ### 工具接口
 
 ```bash
 GET /api/tools
-```
-
-获取可用工具列表。
-
-```bash
 POST /api/tools/:name
-```
-
-调用指定工具：
-```json
-{
-  "params": {
-    "param1": "value1"
-  }
-}
 ```
 
 ### 技能接口
 
 ```bash
 GET /api/skills
-```
-
-获取技能列表。
-
-```bash
 GET /api/skills/:id
-```
-
-获取指定技能。
-
-```bash
 POST /api/skills
-```
-
-创建新技能：
-```json
-{
-  "name": "技能名称",
-  "content": "技能内容",
-  "metadata": {
-    "description": "技能描述",
-    "tags": ["tag1", "tag2"]
-  }
-}
-```
-
-```bash
 DELETE /api/skills/:id
 ```
-
-删除指定技能。
 
 ### 插件接口
 
 ```bash
 GET /api/plugins
-```
-
-获取插件列表。
-
-```bash
 GET /api/plugins/:id
-```
-
-获取指定插件。
-
-```bash
 POST /api/plugins/:id/config
-```
-
-更新插件配置。
-
-```bash
 POST /api/plugins/:id/enable
-```
-
-启用插件。
-
-```bash
 POST /api/plugins/:id/disable
 ```
 
-禁用插件。
-
 ## 开发指南
 
-### 项目结构说明
+### 日志系统（v2.0.0）
 
-#### src/agent/
-- **index.ts**：Agent 核心实现
-- **DESIGN.md**：Agent 设计文档
+使用 pino 结构化日志：
 
-#### src/channels/
-- **feishu.ts**：飞书 WebSocket 实现
-- **DESIGN.md**：通道设计文档
-
-#### src/commands/
-- **default.ts**：默认命令实现
-- **manager.ts**：命令管理器
-- **index.ts**：命令系统入口
-- **DESIGN.md**：命令系统设计文档
-
-#### src/config/
-- **manager.ts**：配置管理器
-- **schema.ts**：配置模式
-- **DESIGN.md**：配置系统设计文档
-
-#### src/cron/
-- **parser.ts**：Cron 表达式解析器
-- **executor.ts**：Shell 脚本执行器
-- **workspace.ts**：工作区隔离系统
-- **subagent.ts**：子代理管理器
-- **error-handler.ts**：错误处理和重试
-- **scheduler.ts**：定时任务调度器
-- **config.ts**：配置示例
-- **DESIGN.md**：定时任务设计文档
-
-#### src/memory/
-- **manager.ts**：记忆管理器实现
-- **DESIGN.md**：记忆管理设计文档
-
-#### src/session/
-- **manager.ts**：会话管理器实现
-- **DESIGN.md**：会话管理设计文档
-
-#### src/tools/
-- **file.ts**：文件工具
-- **shell.ts**：Shell 工具
-- **web.ts**：Web 工具
-- **llm.ts**：LLM 工具
-- **memory.ts**：记忆工具
-- **index.ts**：工具注册表
-- **DESIGN.md**：工具系统设计文档
-
-### 添加新工具
-
-1. 在 `src/tools/` 创建工具文件
-2. 实现工具接口
-3. 在 `src/tools/index.ts` 注册工具
-4. 更新 `src/tools/DESIGN.md`
-
-示例：
 ```typescript
-// src/tools/mytool.ts
-export const myTool = {
-  name: 'mytool',
-  description: 'My custom tool',
-  parameters: {
+import { createLogger } from '@/utils'
+
+const logger = createLogger('MyModule')
+
+logger.info('Processing message', { messageId: '123' })
+logger.error('Error occurred', error, { context: 'data' })
+logger.warn('Warning message', { detail: 'value' })
+logger.debug('Debug info', { data })
+```
+
+日志输出：
+- 开发模式：彩色控制台输出
+- 生产模式：JSON 格式，文件输出
+
+### 自定义错误
+
+```typescript
+import { ValidationError, ToolExecutionError } from '@/errors'
+
+// 验证错误
+throw new ValidationError('Invalid parameter', { param: 'userId' })
+
+// 工具执行错误
+throw new ToolExecutionError('Tool failed', { tool: 'shell', error: '...' })
+```
+
+### 添加新工具（v2.0.0）
+
+工具现在继承 `ToolBase` 基类：
+
+```typescript
+import { ToolBase } from '@/tools/base'
+import type { ToolResult, ToolExecutionContext } from '@/types'
+
+interface MyToolParams {
+  param1: string
+  param2?: number
+}
+
+export class MyTool extends ToolBase<MyToolParams, string> {
+  readonly name = 'mytool'
+  readonly description = 'My custom tool'
+  readonly parameters = {
     type: 'object',
     properties: {
-      param1: { type: 'string', description: 'Parameter 1' }
+      param1: { type: 'string', description: 'Parameter 1' },
+      param2: { type: 'number', description: 'Parameter 2' }
     },
     required: ['param1']
-  },
-  async execute(params: any) {
+  } as const
+
+  protected async executeImpl(
+    params: MyToolParams,
+    context?: ToolExecutionContext
+  ): Promise<string> {
     // 实现工具逻辑
-    return { success: true, result: 'Done' }
+    return `Result: ${params.param1}`
   }
 }
 ```
 
-### 添加新通道
+注册工具：
 
-1. 在 `src/channels/` 创建通道文件
-2. 实现消息接收和发送逻辑
-3. 在 `src/index.ts` 集成通道
-4. 更新 `src/channels/DESIGN.md`
+```typescript
+// src/tools/index.ts
+import { ToolRegistry } from './registry'
+import { MyTool } from './mytool'
+
+export const toolRegistry = new ToolRegistry()
+toolRegistry.register(new MyTool())
+
+export const getTools = () => toolRegistry.getAll()
+```
 
 ### 添加新命令
 
-1. 在 `src/commands/default.ts` 添加命令定义
-2. 实现命令处理函数
-3. 注册命令到 `defaultCommands` 数组
-
-示例：
 ```typescript
+// src/commands/default.ts
 {
   name: 'mycommand',
   description: '我的自定义命令',
@@ -773,20 +580,107 @@ export const myTool = {
 # 运行所有测试
 npm test
 
-# 运行集成测试
-node tests/test.js
+# 运行特定测试文件
+npm test -- session
+
+# 查看覆盖率
+npm run test:coverage
 ```
 
 ### 测试文件
 
-- `test/session.test.ts`：会话管理测试
-- `test/memory.test.ts`：记忆管理测试
-- `test/config.test.ts`：配置管理测试
-- `test/feishu.test.ts`：飞书通道测试
-- `test/server.test.ts`：服务器测试
-- `tests/test.js`：集成测试
+- `tests/unit/session/manager.test.ts` - 会话管理测试
+- `tests/unit/memory/manager.test.ts` - 记忆管理测试
+- `tests/unit/commands/manager.test.ts` - 命令系统测试
+- `tests/unit/utils/lru-cache.test.ts` - LRU 缓存测试
+- `tests/unit/tools/shell.test.ts` - Shell 工具测试
+- `tests/unit/tools/file.test.ts` - File 工具测试
 
 ## 部署
+
+### Linux (systemd)
+
+#### 自动安装
+
+```bash
+# 编译项目
+npm run build
+
+# 运行安装脚本
+sudo ./scripts/install-service.sh
+```
+
+#### 手动安装
+
+```bash
+# 复制服务文件
+sudo cp minibot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 启用并启动服务
+sudo systemctl enable minibot
+sudo systemctl start minibot
+```
+
+#### 服务管理
+
+```bash
+# 启动服务
+sudo systemctl start minibot
+
+# 停止服务
+sudo systemctl stop minibot
+
+# 重启服务
+sudo systemctl restart minibot
+
+# 查看状态
+sudo systemctl status minibot
+
+# 查看日志
+sudo journalctl -u minibot -f
+```
+
+### macOS (launchd)
+
+#### 自动安装
+
+```bash
+# 编译项目
+npm run build
+
+# 运行安装脚本
+sudo ./scripts/install-service-macos.sh
+```
+
+#### 手动安装
+
+```bash
+# 编辑 plist 文件，替换 YOUR_USERNAME
+nano com.github.charlzyx.minibot.plist
+
+# 复制到 LaunchDaemons
+sudo cp com.github.charlzyx.minibot.plist /Library/LaunchDaemons/
+
+# 加载并启动服务
+sudo launchctl load /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+```
+
+#### 服务管理
+
+```bash
+# 启动服务
+sudo launchctl load /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+
+# 停止服务
+sudo launchctl unload /Library/LaunchDaemons/com.github.charlzyx.minibot.plist
+
+# 查看状态
+launchctl list | grep minibot
+
+# 查看日志
+tail -f /opt/minibot/logs/minibot.log
+```
 
 ### Docker 部署
 
@@ -799,34 +693,6 @@ COPY . .
 RUN npm run build
 EXPOSE 18791
 CMD ["npm", "start"]
-```
-
-### 系统服务
-
-创建 systemd 服务文件 `/etc/systemd/system/minibot.service`：
-
-```ini
-[Unit]
-Description=Minibot AI Assistant
-After=network.target
-
-[Service]
-Type=simple
-User=bot
-WorkingDirectory=/opt/minibot
-Environment="NODE_ENV=production"
-ExecStart=/usr/bin/node /opt/minibot/dist/index.js
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动服务：
-```bash
-sudo systemctl enable minibot
-sudo systemctl start minibot
-sudo systemctl status minibot
 ```
 
 ## 故障排查
@@ -855,42 +721,40 @@ ZHIPU_BASE_URL=https://open.bigmodel.cn/api/coding/paas/v4
 
 #### 3. 会话不保存
 
-检查 `sessions/` 目录权限：
+检查 `workspace/sessions/` 目录权限：
 ```bash
-chmod 755 sessions/
+chmod 755 workspace/sessions/
 ```
 
 #### 4. 记忆不保存
 
-检查 `memory/` 和 `db/` 目录权限：
+检查 `workspace/memory/` 和 `workspace/db/` 目录权限：
 ```bash
-chmod 755 memory/ db/
+chmod 755 workspace/memory/ workspace/db/
 ```
-
-#### 5. 容器运行失败
-
-检查容器系统是否可用：
-```bash
-container system status
-```
-
-如果容器系统不可用，Minibot 会自动回退到模拟容器执行。
 
 ### 日志查看
 
 ```bash
-# 查看实时日志
+# 开发模式实时日志
 npm run dev
 
-# 查看系统服务日志
+# 生产模式日志
+tail -f workspace/logs/minibot.log
+
+# Linux systemd 日志
 sudo journalctl -u minibot -f
+
+# macOS launchd 日志
+log show --predicate 'process == "node"' --info
 ```
 
-## 性能优化
+## 性能优化（v2.0.0）
 
-### 1. 会话缓存
+### 1. LRU 缓存
 
-SessionManager 使用内存缓存，频繁访问的会话会保持在内存中。
+- SessionManager 使用 LRU 缓存限制内存使用
+- 可通过 `MAX_SESSION_CACHE` 环境变量调整
 
 ### 2. 消息历史限制
 
@@ -899,51 +763,40 @@ SessionManager 使用内存缓存，频繁访问的会话会保持在内存中�
 const history = sessionManager.getMessages(sessionId, 20)
 ```
 
-### 3. 定时任务优化
+### 3. 连接池
 
-- 使用子代理分布式执行
-- 合理设置任务优先级
-- 配置适当的超时时间
+工具执行使用连接池提高并发性能。
 
-### 4. 容器优化
-
-- 使用真实容器系统获得更好的隔离性
-- 配置容器资源限制
-- 优化容器启动时间
-
-## 安全建议
+## 安全建议（v2.0.0）
 
 1. **环境变量**：不要将 `.env` 文件提交到版本控制
 2. **API Key**：定期轮换 API Key
 3. **工作区隔离**：启用工作区隔离限制文件访问
-4. **命令验证**：验证 Shell 命令的安全性
-5. **输入过滤**：过滤恶意输入
+4. **命令验证**：Shell 工具已内置命令白名单验证
+5. **输入过滤**：所有输入都经过验证
 6. **容器隔离**：使用容器运行器隔离执行环境
+
+## 更新日志
+
+### v2.0.0
+
+主要更新：
+- 重构日志系统（pino 结构化日志）
+- 添加 LRU 缓存支持
+- 安全加固（命令白名单、路径保护）
+- 自定义错误类体系
+- 工具基类模式
+- 完整的类型定义
+- 开机启动支持（Linux/macOS）
+- 优化测试覆盖
+
+详见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 扩展阅读
 
 - [README.md](README.md) - 项目概述
-- [Agent Design](src/agent/DESIGN.md) - Agent 架构
-- [Channels Design](src/channels/DESIGN.md) - 通道设计
-- [Tools Design](src/tools/DESIGN.md) - 工具系统
-- [Memory Design](src/memory/DESIGN.md) - 记忆管理
-- [Session Design](src/session/DESIGN.md) - 会话管理
-- [Config Design](src/config/DESIGN.md) - 配置系统
-- [Cron Design](src/cron/DESIGN.md) - 定时任务
-- [Container Runner](src/container-runner.ts) - 容器执行
-- [Group Queue](src/group-queue.ts) - 队列管理
-- [Message Processor](src/message-processor.ts) - 消息处理
-- [Task Scheduler](src/task-scheduler.ts) - 任务管理
-
-## 贡献
-
-欢迎贡献！请遵循以下步骤：
-
-1. Fork 项目
-2. 创建特性分支
-3. 提交更改
-4. 推送到分支
-5. 创建 Pull Request
+- [CHANGELOG.md](CHANGELOG.md) - 更新日志
+- [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献指南
 
 ## 许可证
 
