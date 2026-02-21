@@ -20,6 +20,8 @@
     "docs:build": "vocs build docs",
     "docs:preview": "vocs preview docs",
     "cli": "tsx src/cli.ts",
+    "container:build": "./scripts/build-container.sh",
+    "container:run": "docker run --rm minibot-code:latest",
     "lint": "echo \"Linting not configured yet\"",
     "format": "echo \"Formatting not configured yet\""
   },
