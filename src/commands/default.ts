@@ -102,6 +102,7 @@ export const defaultCommands: Command[] = [
       // 在独立容器中运行
       try {
         const { runCodeAssistant } = await import('../container-runner-docker')
+        const { getContainerOrchestrator } = await import('../container-orchestrator')
 
         logger.info('Starting code assistant container', { sessionId, task })
 
@@ -136,6 +137,11 @@ export const defaultCommands: Command[] = [
             response += `❌ 执行失败: ${result.error}\n\n`
           }
         }
+
+        // Update queue stats
+        const orchestrator = getContainerOrchestrator()
+        const stats = orchestrator.getQueueStats()
+        response += `📊 队列状态: ${stats.totalRunning} 运行中, ${stats.totalQueued} 等待中\n\n`
       } catch (error) {
         logger.error('Code assistant error', error, { sessionId })
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
