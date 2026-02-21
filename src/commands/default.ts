@@ -80,6 +80,39 @@ export const defaultCommands: Command[] = [
     }
   },
   {
+    name: 'monitor',
+    description: '显示详细监控信息',
+    usage: '/monitor',
+    handler: async (_args, context) => {
+      const { getMonitoringManager } = await import('../monitoring')
+      const monitoringManager = getMonitoringManager()
+
+      return monitoringManager.formatMetrics()
+    }
+  },
+  {
+    name: 'health',
+    description: '检查系统健康状态',
+    usage: '/health',
+    handler: async (_args, _context) => {
+      const { getMonitoringManager } = await import('../monitoring')
+      const monitoringManager = getMonitoringManager()
+
+      const health = monitoringManager.getHealthStatus()
+      const checks = Object.entries(health.checks)
+
+      let output = `🏥 系统健康检查\n\n`
+      output += `状态: ${health.status === 'healthy' ? '✅ 健康' : health.status === 'degraded' ? '⚠️ 降级' : '❌ 不健康'}\n\n`
+      output += `检查项:\n`
+
+      for (const [name, passed] of checks) {
+        output += `  ${passed ? '✅' : '❌'} ${name}\n`
+      }
+
+      return output
+    }
+  },
+  {
     name: 'code',
     description: '启动代码助手并在容器中执行任务',
     usage: '/code [任务描述]',
@@ -149,6 +182,43 @@ export const defaultCommands: Command[] = [
       }
 
       return response
+    }
+  },
+  {
+  },
+  {
+    name: 'mounts',
+    description: '显示挂载安全状态',
+    usage: '/mounts',
+    handler: async (_args, _context) => {
+      const { loadMountAllowlist, MOUNT_ALLOWLIST_PATH, initializeMountAllowlist } = await import('../mount-security')
+
+      const allowlist = loadMountAllowlist()
+
+      if (!allowlist) {
+        return `🔒 **挂载安全状态**\n\n` +
+          `❌ 未找到挂载允许列表\n\n` +
+          `位置: \`${MOUNT_ALLOWLIST_PATH}\`\n\n` +
+          `请创建允许列表以启用额外挂载。`
+      }
+
+      let output = `🔒 **挂载安全状态**\n\n`
+      output += `✅ 允许列表已加载\n\n`
+      output += `**允许的根目录**:\n`
+
+      for (const root of allowlist.allowedRoots) {
+        output += `  - ${root.path}`
+        if (root.description) {
+          output += ` (${root.description})`
+        }
+        output += root.allowReadWrite ? ` [读写]` : ` [只读]`
+        output += `\n`
+      }
+
+      output += `\n**阻止的模式**: ${allowlist.blockedPatterns.join(', ')}\n`
+      output += `**非主组只读**: ${allowlist.nonMainReadOnly ? '是' : '否'}\n`
+
+      return output
     }
   },
   {
