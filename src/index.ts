@@ -573,24 +573,42 @@ async function start() {
 
   logger.info(`🚀 Minibot server starting on port ${port}`)
 
-  if (import.meta.url === `file://${process.argv[1]}`) {
-    serve({
-      fetch: app.fetch,
-      port: Number(port)
-    })
+  serve({
+    fetch: app.fetch,
+    port: Number(port)
+  })
 
-    // Initialize Feishu after a short delay
-    setTimeout(() => {
-      initializeFeishuWS()
-    }, 1000)
-  }
+  // Initialize Feishu after a short delay
+  setTimeout(() => {
+    initializeFeishuWS()
+  }, 1000)
 }
 
-start().catch(error => {
-  logger.error('Failed to start server', error)
-  process.exit(1)
-})
+async function dev() {
+  await initializeManagers()
 
+  logger.info(`🚀 Minibot dev server starting on port ${port}`)
+
+  serve({
+    fetch: app.fetch,
+    port: Number(port)
+  })
+
+  // Initialize Feishu after a short delay
+  setTimeout(() => {
+    initializeFeishuWS()
+  }, 1000)
+}
+
+// Auto-start if running directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  start().catch(error => {
+    logger.error('Failed to start server', error)
+    process.exit(1)
+  })
+}
+
+export { start, dev }
 export default {
   port,
   fetch: app.fetch,

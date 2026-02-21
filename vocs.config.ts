@@ -1,94 +1,106 @@
 import { defineConfig } from 'vocs'
 
 export default defineConfig({
-  title: 'Minibot Documentation',
-  description: 'Lightweight AI assistant with Hono + TypeScript',
+  title: 'Minibot',
+  description: '轻量级 AI 助手 - 基于 Hono + TypeScript + Node.js',
+  lang: 'zh-CN',
   theme: {
+    logo: {
+      text: 'Minibot',
+      image: '/logo.svg'
+    },
+    header: {
+      actions: [
+        {
+          text: 'GitHub',
+          link: 'https://github.com/charlzyx/minibot'
+        }
+      ]
+    },
     sidebar: {
-      items: [
+      '/': [
         {
-          text: 'Introduction',
-          link: '/',
-        },
-        {
-          text: 'Guide',
+          text: '开始',
           items: [
             {
-              text: 'Getting Started',
-              link: '/guide/usage',
+              text: '简介',
+              link: '/'
             },
             {
-              text: 'Cron Guide',
-              link: '/guide/cron-guide',
+              text: '快速开始',
+              link: '/guide/getting-started'
             },
             {
-              text: 'Cron Deployment',
-              link: '/guide/cron-deployment',
+              text: '5分钟上手',
+              link: '/guide/quick-start'
             },
-          ],
+            {
+              text: '配置指南',
+              link: '/guide/configuration'
+            },
+            {
+              text: '部署指南',
+              link: '/guide/deployment'
+            }
+          ]
         },
         {
-          text: 'API Reference',
+          text: '功能指南',
+          items: [
+            {
+              text: '代码助手',
+              link: '/guide/code-assistant'
+            }
+          ]
+        },
+        {
+          text: 'API 参考',
           items: [
             {
               text: 'Agent',
-              link: '/api/agent',
+              link: '/api/agent'
             },
             {
               text: 'Commands',
-              link: '/api/commands',
+              link: '/api/commands'
             },
             {
               text: 'Session',
-              link: '/api/session',
+              link: '/api/session'
             },
             {
               text: 'Tools',
-              link: '/api/tools',
-            },
-          ],
+              link: '/api/tools'
+            }
+          ]
         },
         {
-          text: 'Tutorials',
+          text: '参考',
           items: [
             {
-              text: 'Basic Usage',
-              link: '/tutorials/basic',
+              text: 'CLI 命令',
+              link: '/reference/cli'
             },
             {
-              text: 'Advanced Features',
-              link: '/tutorials/advanced',
-            },
-          ],
-        },
-        {
-          text: 'Reference',
-          items: [
-            {
-              text: 'Configuration',
-              link: '/reference/config',
-            },
-            {
-              text: 'Environment Variables',
-              link: '/reference/env',
-            },
-            {
-              text: 'CLI Commands',
-              link: '/reference/cli',
-            },
-          ],
-        },
-      ],
+              text: '环境变量',
+              link: '/reference/env'
+            }
+          ]
+        }
+      ]
     },
+    footer: {
+      message: '基于 MIT 许可证发布',
+      copyright: 'Copyright © 2024 charlzyx'
+    }
   },
-  head:
-    [
-      {
-        tag: 'link',
-        attrs: {
-          rel: 'icon',
-          href: '/favicon.ico',
-        },
-      },
-    ],
+  head: [
+    {
+      tag: 'link',
+      attrs: {
+        rel: 'icon',
+        href: '/favicon.ico'
+      }
+    }
+  ]
 })

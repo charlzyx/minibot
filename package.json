@@ -1,16 +1,17 @@
 {
   "name": "minibot",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Minibot - Lightweight AI assistant with Hono + TypeScript",
   "type": "module",
   "main": "src/index.ts",
   "bin": {
-    "minibot": "dist/cli.js"
+    "minibot": "dist/cli/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
+    "build:cli": "tsc && tsc-alias",
     "test": "vitest",
     "test:unit": "vitest run --dir tests/unit",
     "test:integration": "vitest run --dir tests/integration",
@@ -19,9 +20,8 @@
     "docs:dev": "vocs dev docs",
     "docs:build": "vocs build docs",
     "docs:preview": "vocs preview docs",
-    "cli": "tsx src/cli.ts",
-    "container:build": "./scripts/build-container.sh",
-    "container:run": "docker run --rm minibot-code:latest",
+    "container:build": "./scripts/build-claude-container.sh",
+    "container:build:all": "./scripts/build-container.sh",
     "lint": "echo \"Linting not configured yet\"",
     "format": "echo \"Formatting not configured yet\""
   },
@@ -42,6 +42,9 @@
     "@hono/zod-validator": "^0.2.2",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "better-sqlite3": "12.6.2",
+    "c12": "^4.0.0-beta.3",
+    "citty": "^0.2.1",
+    "consola": "^3.4.2",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.3.1",
     "hono": "^4.4.3",
@@ -52,6 +55,7 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@anthropic-ai/claude-code": "^2.1.50",
     "@types/better-sqlite3": "^7.6.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.24",

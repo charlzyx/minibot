@@ -1,0 +1,51 @@
+# Claude Code Container for Minibot
+# This container runs Claude Code for complex code engineering tasks
+
+FROM node:18-alpine
+
+# Install Claude Code and dependencies
+RUN apk add --no-cache \
+    bash \
+    curl \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    sudo \
+    openssh-client \
+    && rm -rf /var/cache/apk/*
+
+# Install Claude Code CLI globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create workspace directory
+WORKDIR /project
+
+# Create non-root user with sudo permissions for some operations
+RUN addgroup -g 1001 -S claude && \
+    adduser -u 1001 -S claude -G claude && \
+    echo "claude ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Create directories
+RUN mkdir -p /project /home/claude/.claude && \
+    chown -R claude:claude /project /home/claude
+
+# Set environment variables
+ENV NODE_ENV=production \
+    CLAUDE_CONTAINER=true \
+    PROJECT_DIR=/project \
+    HOME=/home/claude
+
+# Switch to claude user
+USER claude
+
+# Set default working directory
+WORKDIR /project
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD node --version || exit 1
+
+# Default entrypoint - run Claude Code with provided arguments
+ENTRYPOINT ["claude"]
+CMD ["--help"]

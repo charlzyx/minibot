@@ -114,8 +114,8 @@ export const defaultCommands: Command[] = [
   },
   {
     name: 'code',
-    description: '启动代码助手并在容器中执行任务',
-    usage: '/code [任务描述]',
+    description: '启动 Claude Code 代码助手并在容器中执行任务',
+    usage: '/code <任务描述>',
     handler: async (args, context) => {
       const sessionManager = getSessionManager()
       const sessionId = context.sessionId || `${context.platform}:${context.userId}`
@@ -124,61 +124,73 @@ export const defaultCommands: Command[] = [
       session.activeSkill = 'code-assistant'
       await sessionManager.save(session)
 
-      logger.info('Code assistant starting', { sessionId, args: args.join(' ') })
+      logger.info('Claude Code assistant starting', { sessionId, args: args.join(' ') })
 
-      let response = '🤖 **代码助手已启动**\n\n'
+      const task = args.length > 0 ? args.join(' ') : ''
 
-      const task = args.length > 0 ? args.join(' ') : 'info'
+      if (!task) {
+        return `🤖 **Claude Code 代码助手**
 
+在隔离的 Docker 容器中运行 Claude Code，执行复杂的代码工程任务。
+
+**用法:**
+\`\`\`
+/code <任务描述>
+\`\`\`
+
+**示例:**
+- \`/code 帮我重构 src/utils.ts 文件\`
+- \`/code 添加单元测试\`
+- \`/code 代码审查并优化性能\`
+
+**功能:**
+- 🔒 完全隔离的容器环境
+- 📝 支持项目目录挂载
+- ⏱️ 可配置超时时间
+- 💾 支持会话持久化
+
+**注意:** 首次使用需要构建容器镜像，请确保 Docker 已安装并运行。`
+      }
+
+      let response = '🤖 **Claude Code 代码助手已启动**\n\n'
       response += `📦 任务: ${task}\n\n`
+      response += `🚀 正在启动 Claude Code 容器...\n\n`
 
-      // 在独立容器中运行
       try {
-        const { runCodeAssistant } = await import('../container-runner-docker')
-        const { getContainerOrchestrator } = await import('../container-orchestrator')
+        const { runClaudeCode } = await import('../container/claude-runner')
 
-        logger.info('Starting code assistant container', { sessionId, task })
-
-        response += `🚀 正在启动独立容器...\n\n`
-
-        const result = await runCodeAssistant({
-          prompt: task,
-          sessionId: sessionId,
-          chatJid: sessionId,
-          containerOptions: {
-            imageName: 'node:18-alpine',
-            memoryLimit: '512m',
-            timeout: 60000
-          },
-          async onOutput(output) {
-            logger.info('Container output received', { status: output.status })
-            if (output.status === 'success') {
-              response += `✅ 执行成功！\n\n`
-              response += `📦 输出:\n\`\`\`\n${output.result}\n\`\`\`\n\n`
-            } else {
-              response += `❌ 执行失败: ${output.error}\n\n`
-            }
+        const result = await runClaudeCode({
+          task,
+          sessionId,
+          options: {
+            apiKey: process.env.ANTHROPIC_API_KEY,
+            timeout: 300000 // 5 minutes
           }
         })
 
-        // 如果 onOutput 没有添加响应，添加默认响应
-        if (!response.includes('执行成功') && !response.includes('执行失败')) {
-          if (result.status === 'success') {
-            response += `✅ 执行成功！\n\n`
-            response += `📦 输出:\n\`\`\`\n${result.result}\n\`\`\`\n\n`
-          } else {
-            response += `❌ 执行失败: ${result.error}\n\n`
+        logger.info('Claude Code completed', { sessionId, status: result.status })
+
+        if (result.status === 'success') {
+          response += `✅ 执行成功！\n\n`
+          if (result.output) {
+            response += `📦 输出:\n\`\`\`\n${result.output}\n\`\`\`\n\n`
+          }
+        } else if (result.status === 'timeout') {
+          response += `⏱️ 执行超时\n\n`
+          response += `💡 提示: 可以使用更长的超时时间或简化任务\n\n`
+        } else {
+          response += `❌ 执行失败\n\n`
+          if (result.error) {
+            response += `错误: ${result.error}\n\n`
           }
         }
-
-        // Update queue stats
-        const orchestrator = getContainerOrchestrator()
-        const stats = orchestrator.getQueueStats()
-        response += `📊 队列状态: ${stats.totalRunning} 运行中, ${stats.totalQueued} 等待中\n\n`
       } catch (error) {
-        logger.error('Code assistant error', error, { sessionId })
+        logger.error('Claude Code error', error, { sessionId })
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
-        response += `💡 提示: 请确保 Docker 已安装并运行\n\n`
+        response += `💡 提示:\n`
+        response += `- 请确保 Docker 已安装并运行\n`
+        response += `- 请确保已设置 ANTHROPIC_API_KEY 环境变量\n`
+        response += `- 使用 \`minibot container build\` 构建容器镜像\n\n`
       }
 
       return response
