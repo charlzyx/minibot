@@ -1,205 +1,16 @@
-import { getConfigManager, closeConfigManager, Config } from '../config/manager'
-import { getMemoryManager, closeMemoryManager, Memory } from '../memory/manager'
+import type { AgentContext, ToolResult, LLMMessage, ToolCall } from '@/types'
+import { getConfigManager } from '../config/manager'
+import { getMemoryManager } from '../memory/manager'
 import { getTools, getToolDefinitions } from '../tools'
-import { getSessionManager, ChatMessage } from '../session'
+import { getSessionManager } from '../session'
 import { getSkillManager } from '../skills'
 import { getCommandManager } from '../commands'
+import { createLogger, LLMError, ErrorHandler } from '@/utils'
 
-interface AgentContext {
-  userMessage: string
-  userId: string
-  platform: string
-  messageId: string
-  sessionId?: string
-  history: ChatMessage[]
-  metadata: Record<string, any>
-}
+const logger = createLogger('Agent')
 
-interface Intent {
-  type: 'chat' | 'search' | 'tool' | 'schedule' | 'memory'
-  action: string
-  confidence: number
-  params?: Record<string, any>
-}
-
-interface ToolResult {
-  tool: string
-  success: boolean
-  result?: any
-  error?: string
-}
-
-export class Agent {
-  private configManager: ReturnType<typeof getConfigManager>
-  private memoryManager: ReturnType<typeof getMemoryManager>
-  private skillManager: ReturnType<typeof getSkillManager>
-  private tools: Record<string, any>
-  private toolDefinitions: any[]
-
-  constructor() {
-    this.configManager = getConfigManager()
-    this.memoryManager = getMemoryManager()
-    this.skillManager = getSkillManager()
-    this.tools = getTools()
-    this.toolDefinitions = getToolDefinitions()
-  }
-
-  async process(context: AgentContext): Promise<string> {
-    console.log('[Agent] Starting process...')
-    
-    const commandManager = getCommandManager()
-    const commandResult = await commandManager.execute(context.userMessage, context)
-    
-    if (commandResult !== null) {
-      console.log('[Agent] Command executed:', commandResult)
-      
-      const sessionManager = getSessionManager()
-      const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-      sessionManager.addMessage(sessionId, 'user', context.userMessage)
-      sessionManager.addMessage(sessionId, 'assistant', commandResult)
-      await sessionManager.save(sessionManager.getOrCreate(sessionId))
-      
-      return commandResult
-    }
-    
-    // Handle skill-creator flow
-    const sessionManager = getSessionManager()
-    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-    const session = sessionManager.getOrCreate(sessionId)
-    
-    if (session.activeSkill === 'skill-creator') {
-      return await this.handleSkillCreator(context, session, sessionManager)
-    }
-    
-    const config = await this.configManager.loadConfig()
-    console.log('[Agent] Config loaded')
-    
-    const messages = this.buildLLMMessages(context, config)
-    console.log('[Agent] Messages built, count:', messages.length)
-    
-    const maxIterations = 20
-    let iteration = 0
-    let finalContent: string | null = null
-    
-    while (iteration < maxIterations) {
-      iteration++
-      console.log(`[Agent] Iteration ${iteration}/${maxIterations}`)
-      
-      console.log('[Agent] Calling LLM...')
-      const llmResult = await this.tools.llm.execute({
-        provider: config.provider.name,
-        model: config.model.name,
-        messages,
-        tools: this.toolDefinitions
-      })
-      console.log('[Agent] LLM result received, tool_calls:', llmResult.tool_calls?.length || 0)
-      
-      if (llmResult.tool_calls && llmResult.tool_calls.length > 0) {
-        messages.push({
-          role: 'assistant',
-          content: llmResult.content || '',
-          tool_calls: llmResult.tool_calls
-        })
-        
-        for (const toolCall of llmResult.tool_calls) {
-          const args = JSON.parse(toolCall.function.arguments)
-          console.log(`[Agent] Tool call: ${toolCall.function.name}(${JSON.stringify(args)})`)
-          
-          const result = await this.executeTool(toolCall.function.name, args, context)
-          console.log('[Agent] Tool result:', JSON.stringify(result).substring(0, 200))
-          
-          messages.push({
-            role: 'tool',
-            content: JSON.stringify(result),
-            tool_call_id: toolCall.id
-          })
-        }
-      } else {
-        finalContent = llmResult.content || ''
-        console.log('[Agent] Final content received, length:', finalContent!.length)
-        break
-      }
-    }
-    
-    if (finalContent === null) {
-      finalContent = 'I\'ve completed processing but have no response to give.'
-      console.log('[Agent] No final content, using fallback')
-    }
-    
-    console.log('[Agent] Updating session...')
-    sessionManager.addMessage(sessionId, 'user', context.userMessage)
-    sessionManager.addMessage(sessionId, 'assistant', finalContent!)
-    await sessionManager.save(sessionManager.getOrCreate(sessionId))
-    
-    console.log('[Agent] Updating memory...')
-    await this.updateMemory(context, finalContent!)
-    
-    return finalContent!
-  }
-
-  private async executeTool(toolName: string, params: any, context: AgentContext): Promise<ToolResult> {
-    const tool = this.tools[toolName]
-    
-    if (!tool) {
-      return {
-        tool: toolName,
-        success: false,
-        error: `Tool ${toolName} not found`
-      }
-    }
-    
-    try {
-      const result = await tool.execute(params)
-      
-      return {
-        tool: toolName,
-        success: true,
-        result
-      }
-    } catch (error) {
-      console.error(`[Agent] Tool execution error:`, error)
-      
-      return {
-        tool: toolName,
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      }
-    }
-  }
-
-  private buildLLMMessages(context: AgentContext, config: Config): any[] {
-    const messages: any[] = [
-      {
-        role: 'system',
-        content: this.buildSystemPrompt(config, context)
-      }
-    ]
-    
-    for (const msg of context.history) {
-      if (msg.role === 'user' || msg.role === 'assistant') {
-        messages.push({
-          role: msg.role,
-          content: msg.content
-        })
-      }
-    }
-    
-    messages.push({
-      role: 'user',
-      content: context.userMessage
-    })
-    
-    return messages
-  }
-
-  private buildSystemPrompt(config: Config, context: AgentContext): string {
-    const sessionManager = getSessionManager()
-    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
-    const session = sessionManager.getOrCreate(sessionId)
-    
-    const skillsPrompt = ''
-    
-    let prompt = `You are an AI assistant that helps users solve problems.
+const MAX_ITERATIONS = 20
+const DEFAULT_SYSTEM_PROMPT = `You are an AI assistant that helps users solve problems.
 
 You have access to following tools:
 - shell: Execute shell commands
@@ -217,11 +28,202 @@ For example:
 
 Always respond with the tool call format expected by the API, including the function name and arguments.
 
-Configuration:
-- Model: ${config.model.name}
-- Max tokens: ${config.model.maxTokens}
-
 Provide accurate and helpful responses to user requests.`
+
+/**
+ * Agent - Core intelligence unit for processing user messages
+ */
+export class Agent {
+  private tools: Record<string, unknown>
+  private toolDefinitions: ToolDefinition[]
+
+  constructor() {
+    this.tools = getTools()
+    this.toolDefinitions = getToolDefinitions()
+    logger.info('Agent initialized')
+  }
+
+  /**
+   * Process a user message and generate a response
+   */
+  async process(context: AgentContext): Promise<string> {
+    logger.info('Processing message', {
+      userId: context.userId,
+      platform: context.platform,
+      messageLength: context.userMessage.length
+    })
+
+    const commandManager = getCommandManager()
+    const commandResult = await commandManager.execute(context.userMessage, context)
+
+    if (commandResult !== null) {
+      logger.info('Command executed', { result: commandResult.substring(0, 100) })
+
+      const sessionManager = getSessionManager()
+      const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+      sessionManager.addMessage(sessionId, 'user', context.userMessage)
+      sessionManager.addMessage(sessionId, 'assistant', commandResult)
+      await sessionManager.save(sessionManager.getOrCreate(sessionId))
+
+      return commandResult
+    }
+
+    // Handle skill-creator flow
+    const sessionManager = getSessionManager()
+    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+    const session = sessionManager.getOrCreate(sessionId)
+
+    if (session.activeSkill === 'skill-creator') {
+      return await this.handleSkillCreator(context, session, sessionManager)
+    }
+
+    const config = await getConfigManager().loadConfig()
+    logger.debug('Config loaded', { provider: config.provider.name, model: config.model.name })
+
+    const messages = this.buildLLMMessages(context, config)
+    logger.debug('Messages built', { count: messages.length })
+
+    let iteration = 0
+    let finalContent: string | null = null
+
+    while (iteration < MAX_ITERATIONS) {
+      iteration++
+      logger.debug(`Iteration ${iteration}/${MAX_ITERATIONS}`)
+
+      const llmResult = await this.tools.llm.execute({
+        provider: config.provider.name,
+        model: config.model.name,
+        messages,
+        tools: this.toolDefinitions
+      })
+
+      logger.debug('LLM result received', {
+        toolCalls: llmResult.tool_calls?.length || 0,
+        contentLength: llmResult.content?.length || 0
+      })
+
+      if (llmResult.tool_calls && llmResult.tool_calls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: llmResult.content || '',
+          tool_calls: llmResult.tool_calls
+        })
+
+        for (const toolCall of llmResult.tool_calls) {
+          const args = JSON.parse(toolCall.function.arguments)
+          logger.debug(`Tool call: ${toolCall.function.name}`, { args })
+
+          const result = await this.executeTool(toolCall.function.name, args, context)
+
+          logger.debug('Tool result', {
+            tool: toolCall.function.name,
+            success: result.success,
+            resultLength: JSON.stringify(result).length
+          })
+
+          messages.push({
+            role: 'tool',
+            content: JSON.stringify(result),
+            tool_call_id: toolCall.id
+          })
+        }
+      } else {
+        finalContent = llmResult.content || ''
+        logger.debug('Final content received', { length: finalContent.length })
+        break
+      }
+    }
+
+    if (finalContent === null) {
+      finalContent = "I've completed processing but have no response to give."
+      logger.warn('No final content, using fallback')
+    }
+
+    logger.debug('Updating session')
+    sessionManager.addMessage(sessionId, 'user', context.userMessage)
+    sessionManager.addMessage(sessionId, 'assistant', finalContent)
+    await sessionManager.save(sessionManager.getOrCreate(sessionId))
+
+    logger.debug('Updating memory')
+    await this.updateMemory(context, finalContent)
+
+    logger.info('Message processing complete', {
+      iterations: iteration,
+      responseLength: finalContent.length
+    })
+
+    return finalContent
+  }
+
+  /**
+   * Execute a tool
+   */
+  private async executeTool(toolName: string, params: unknown, context: AgentContext): Promise<ToolResult> {
+    const tool = this.tools[toolName] as { execute: (params: unknown) => Promise<ToolResult> }
+
+    if (!tool) {
+      logger.warn(`Tool not found: ${toolName}`)
+      return {
+        success: false,
+        error: `Tool ${toolName} not found`,
+        timestamp: Date.now()
+      }
+    }
+
+    try {
+      const result = await tool.execute(params)
+      return result
+    } catch (error) {
+      const handled = ErrorHandler.handle(error, `Tool:${toolName}`)
+      logger.error(`Tool execution error: ${toolName}`, error)
+
+      return {
+        success: false,
+        error: handled.message,
+        timestamp: Date.now()
+      }
+    }
+  }
+
+  /**
+   * Build LLM messages
+   */
+  private buildLLMMessages(context: AgentContext, config: unknown): LLMMessage[] {
+    const messages: LLMMessage[] = [
+      {
+        role: 'system',
+        content: this.buildSystemPrompt(config, context)
+      }
+    ]
+
+    for (const msg of context.history) {
+      messages.push({
+        role: msg.role,
+        content: msg.content
+      })
+    }
+
+    messages.push({
+      role: 'user',
+      content: context.userMessage
+    })
+
+    return messages
+  }
+
+  /**
+   * Build system prompt
+   */
+  private buildSystemPrompt(config: { model: { name: string; maxTokens?: number } }, context: AgentContext): string {
+    const sessionManager = getSessionManager()
+    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+    const session = sessionManager.getOrCreate(sessionId)
+
+    let prompt = DEFAULT_SYSTEM_PROMPT
+
+    prompt += `\n\nConfiguration:
+- Model: ${config.model.name}
+- Max tokens: ${config.model.maxTokens || 4096}`
 
     if (session.activeSkill === 'claude-code') {
       prompt += `\n\nYou are currently in Claude Code mode. Focus on programming tasks including:
@@ -233,108 +235,111 @@ Provide accurate and helpful responses to user requests.`
 IMPORTANT: Provide timely status updates during execution. Report progress and intermediate results immediately. If you encounter any errors, notify the user right away with clear error information and suggested solutions.`
     }
 
-    if (skillsPrompt) {
-      prompt += `\n\n${skillsPrompt}`
-    }
-
     return prompt
   }
 
+  /**
+   * Update memory with conversation
+   */
   private async updateMemory(context: AgentContext, response: string): Promise<void> {
-    await this.memoryManager.store(context.userMessage, ['chat', context.userId, context.platform])
-    await this.memoryManager.store(response, ['assistant', context.userId, context.platform])
+    try {
+      const memoryManager = getMemoryManager()
+      await memoryManager.store(context.userMessage, ['chat', context.userId, context.platform])
+      await memoryManager.store(response, ['assistant', context.userId, context.platform])
+      logger.debug('Memory updated')
+    } catch (error) {
+      logger.error('Failed to update memory', error)
+    }
   }
 
-  private async handleSkillCreator(context: AgentContext, session: any, sessionManager: any): Promise<string> {
-    const skillCreatorState = session.state?.skillCreator || { step: 1, skillData: {} }
+  /**
+   * Handle skill-creator flow
+   */
+  private async handleSkillCreator(
+    context: AgentContext,
+    session: { activeSkill?: string | null; state?: Record<string, unknown> },
+    sessionManager: { save: (session: unknown) => Promise<void> }
+  ): Promise<string> {
+    const skillCreatorState = (session.state?.skillCreator as { step: number; skillData: Record<string, unknown> } | undefined) || { step: 1, skillData: {} }
     const { step, skillData } = skillCreatorState
-    
+
     let nextStep = step
     let response = ''
-    
+
     switch (step) {
       case 1:
-        // 处理技能名称
         if (context.userMessage.trim()) {
-          skillData.name = context.userMessage.trim()
+          (skillData as Record<string, unknown>).name = context.userMessage.trim()
           nextStep = 2
-          response = `✅ 技能名称已设置为: ${skillData.name}\n\n` +
-            '现在，请提供技能的描述：'
+          response = `Skill name set to: ${skillData.name}\n\nNow, please provide a description for the skill:`
         } else {
-          response = '❌ 技能名称不能为空，请重新输入：'
+          response = 'Skill name cannot be empty. Please try again:'
         }
         break
-        
+
       case 2:
-        // 处理技能描述
-        skillData.description = context.userMessage.trim() || ''
+        (skillData as Record<string, unknown>).description = context.userMessage.trim() || ''
         nextStep = 3
-        response = `✅ 技能描述已设置\n\n` +
-          '现在，请输入技能的标签（用逗号分隔）：'
+        response = `Skill description set.\n\nNow, please enter the skill tags (comma-separated):`
         break
-        
+
       case 3:
-        // 处理技能标签
         const tags = context.userMessage.trim()
           ? context.userMessage.split(',').map((tag: string) => tag.trim())
           : []
-        skillData.tags = tags
+        (skillData as Record<string, unknown>).tags = tags
         nextStep = 4
-        response = `✅ 技能标签已设置为: ${tags.join(', ')}\n\n` +
-          '现在，请编写技能的实现代码：\n\n' +
-          '技能代码应该导出一个包含 execute 方法的对象，例如：\n\n' +
-          '```javascript\n' +
-          'module.exports = {\n' +
-          '  async execute(context, args) {\n' +
-          '    return "技能执行结果"\n' +
-          '  }\n' +
-          '}\n' +
-          '```\n\n' +
-          '请输入你的技能代码：'
+        response = `Skill tags set to: ${tags.join(', ')}\n\nNow, please write the skill implementation code:\n\n` +
+          `Skill code should export an object with an execute method, for example:\n\n` +
+          ````javascript\n` +
+          `module.exports = {\n` +
+          `  async execute(context, args) {\n` +
+          `    return "Skill execution result"\n` +
+          `  }\n` +
+          `}\n` +
+          ````\n\n` +
+          `Please enter your skill code:`
         break
-        
+
       case 4:
-        // 处理技能代码
-        skillData.code = context.userMessage.trim()
-        
-        // 创建技能
+        (skillData as Record<string, unknown>).code = context.userMessage.trim()
+
         try {
           const { getSkillManager } = await import('../skills')
           const skillManager = getSkillManager()
-          
+
           const filePath = await skillManager.createSkill(
-            skillData.name,
-            skillData.code,
+            skillData.name as string,
+            skillData.code as string,
             {
-              name: skillData.name,
-              description: skillData.description,
-              tags: skillData.tags
+              name: skillData.name as string,
+              description: skillData.description as string,
+              tags: skillData.tags as string[]
             }
           )
-          
-          // 重置会话状态
+
           session.activeSkill = null
           session.state = {
             ...session.state,
             skillCreator: null
           }
           await sessionManager.save(session)
-          
-          response = `🎉 **技能创建成功！**\n\n` +
-            `技能名称: ${skillData.name}\n` +
-            `描述: ${skillData.description || '无'}\n` +
-            `标签: ${skillData.tags.join(', ') || '无'}\n` +
-            `文件路径: ${filePath}\n\n` +
-            '你可以使用 `/skills` 命令查看所有可用的技能。'
+
+          response = `**Skill created successfully!**\n\n` +
+            `Skill name: ${skillData.name}\n` +
+            `Description: ${skillData.description || 'None'}\n` +
+            `Tags: ${(skillData.tags as string[]).join(', ') || 'None'}\n` +
+            `File path: ${filePath}\n\n` +
+            `You can use \`/skills\` command to view all available skills.`
         } catch (error) {
-          console.error('[Agent] Failed to create skill:', error)
-          response = `❌ 技能创建失败：${error instanceof Error ? error.message : String(error)}\n\n` +
-            '请重试或联系管理员。'
+          logger.error('Failed to create skill', error)
+          response = `Failed to create skill: ${error instanceof Error ? error.message : String(error)}\n\n` +
+            `Please try again or contact administrator.`
         }
         break
-        
+
       default:
-        response = '❌ 技能创建流程出错，请重新开始。'
+        response = 'Skill creation flow error. Please start again.'
         session.activeSkill = null
         session.state = {
           ...session.state,
@@ -343,8 +348,8 @@ IMPORTANT: Provide timely status updates during execution. Report progress and i
         await sessionManager.save(session)
         break
     }
-    
-    // 更新会话状态
+
+    // Update session state
     if (nextStep <= 4) {
       session.state = {
         ...session.state,
@@ -355,16 +360,35 @@ IMPORTANT: Provide timely status updates during execution. Report progress and i
       }
       await sessionManager.save(session)
     }
-    
-    // 保存消息记录
-    sessionManager.addMessage(context.sessionId || `${context.platform}:${context.userId}`, 'user', context.userMessage)
-    sessionManager.addMessage(context.sessionId || `${context.platform}:${context.userId}`, 'assistant', response)
-    
+
+    const sessionId = context.sessionId || `${context.platform}:${context.userId}`
+    sessionManager.addMessage(sessionId, 'user', context.userMessage)
+    sessionManager.addMessage(sessionId, 'assistant', response)
+
     return response
   }
 
-  async destroy() {
-    this.memoryManager.close()
-    this.configManager.close()
+  /**
+   * Cleanup resources
+   */
+  async destroy(): Promise<void> {
+    logger.info('Destroying agent')
+    const memoryManager = getMemoryManager()
+    const configManager = getConfigManager()
+
+    memoryManager.close()
+    configManager.close()
+
+    logger.info('Agent destroyed')
+  }
+}
+
+// Type definitions
+interface ToolDefinition {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
   }
 }

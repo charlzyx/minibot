@@ -1,57 +1,235 @@
-import { getConfigManager } from '../config/manager'
+import type { LLMMessage, LLMResponse, ToolDefinition, ToolResult } from '@/types'
+import { ToolBase } from './base'
+import { LLMError, createLogger } from '@/utils'
 
-interface LLMParams {
-  provider?: string
-  model?: string
-  messages?: Array<{
-    role: 'system' | 'user' | 'assistant' | 'tool'
-    content: string
-    tool_call_id?: string
-    tool_calls?: Array<{
-      id: string
-      type: 'function'
-      function: {
-        name: string
-        arguments: string
+const logger = createLogger('LLMTool')
+
+/**
+ * Default model configuration
+ */
+const DEFAULT_MODEL = 'glm-4.7'
+const DEFAULT_MAX_TOKENS = 4096
+const DEFAULT_TEMPERATURE = 0.7
+
+/**
+ * LLM tool for calling language models
+ */
+export class LLMTool extends ToolBase<
+  {
+    provider?: string
+    model?: string
+    messages: LLMMessage[]
+    tools?: ToolDefinition[]
+    maxTokens?: number
+    temperature?: number
+  },
+  LLMResponse
+> {
+  readonly name = 'llm'
+  readonly description = 'Call Large Language Model APIs for text generation'
+  readonly parameters = {
+    type: 'object',
+    properties: {
+      provider: {
+        type: 'string',
+        description: 'LLM provider name (default: from config)'
+      },
+      model: {
+        type: 'string',
+        description: 'Model name'
+      },
+      messages: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            role: { type: 'string' },
+            content: { type: 'string' }
+          }
+        },
+        description: 'Chat messages'
+      },
+      tools: {
+        type: 'array',
+        description: 'Tool definitions for function calling'
+      },
+      maxTokens: {
+        type: 'number',
+        description: 'Maximum tokens to generate'
+      },
+      temperature: {
+        type: 'number',
+        description: 'Sampling temperature (0-1)'
       }
-    }>
-  }>
-  prompt?: string
-  tools?: Array<{
-    type: 'function'
-    function: {
-      name: string
-      description: string
-      parameters: Record<string, any>
-    }
-  }>
-}
+    },
+    required: ['messages']
+  } as const
 
-export interface LLMResult {
-  content: string
-  model: string
-  usage?: {
-    input_tokens: number
-    output_tokens: number
+  /**
+   * Build API request body
+   */
+  private buildRequestBody(params: {
+    messages: LLMMessage[]
+    tools?: ToolDefinition[]
+    maxTokens?: number
+    temperature?: number
+  }): object {
+    const { messages, tools, maxTokens, temperature } = params
+
+    const body: Record<string, unknown> = {
+      model: DEFAULT_MODEL,
+      messages: messages.map(msg => {
+        const result: Record<string, unknown> = {
+          role: msg.role,
+          content: msg.content
+        }
+
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          result.tool_calls = msg.toolCalls
+        }
+
+        return result
+      })
+    }
+
+    if (tools && tools.length > 0) {
+      body.tools = tools
+    }
+
+    if (maxTokens !== undefined) {
+      body.max_tokens = maxTokens
+    }
+
+    if (temperature !== undefined) {
+      body.temperature = temperature
+    }
+
+    return body
   }
-  finish_reason?: string
-  tool_calls?: Array<{
-    id: string
-    type: 'function'
-    function: {
-      name: string
-      arguments: string
+
+  /**
+   * Execute LLM request
+   */
+  protected async executeImpl(
+    params: {
+      provider?: string
+      model?: string
+      messages: LLMMessage[]
+      tools?: ToolDefinition[]
+      maxTokens?: number
+      temperature?: number
+    },
+    context?: unknown
+  ): Promise<LLMResponse> {
+    // Get configuration from environment
+    const apiKey = process.env.ZHIPU_API_KEY || process.env.OPENAI_API_KEY
+    const apiBase = process.env.ZHIPU_BASE_URL || process.env.OPENAI_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4'
+    const provider = params.provider || 'zhipu'
+    const model = params.model || DEFAULT_MODEL
+
+    if (!apiKey) {
+      throw new LLMError('API key not configured', provider)
     }
-  }>
+
+    logger.info(`Calling LLM: ${model}`, {
+      provider,
+      messageCount: params.messages.length,
+      hasTools: !!params.tools?.length
+    })
+
+    const body = this.buildRequestBody(params)
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    }
+
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60000)
+
+    try {
+      const url = `${apiBase}/chat/completions`
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new LLMError(
+          `LLM API error: ${response.status} ${response.statusText}`,
+          provider,
+          { status: response.status, error: errorText }
+        )
+      }
+
+      const data = await response.json() as LLMAPIResponse
+
+      const choice = data.choices[0]
+      if (!choice) {
+        throw new LLMError('No response choices returned', provider)
+      }
+
+      const result: LLMResponse = {
+        content: choice.message.content || '',
+        model: data.model,
+        usage: data.usage ? {
+          inputTokens: data.usage.prompt_tokens,
+          outputTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens
+        } : undefined,
+        finishReason: choice.finish_reason
+      }
+
+      if (choice.message.tool_calls) {
+        result.toolCalls = choice.message.tool_calls
+      }
+
+      logger.info(`LLM response received`, {
+        model: result.model,
+        finishReason: result.finishReason,
+        usage: result.usage
+      })
+
+      return result
+    } catch (error) {
+      if (error instanceof LLMError) {
+        throw error
+      }
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new LLMError('LLM request timeout', provider)
+      }
+
+      throw new LLMError(
+        error instanceof Error ? error.message : String(error),
+        provider
+      )
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
 }
 
-interface ChatResponse {
+/**
+ * LLM API response shape
+ */
+interface LLMAPIResponse {
+  id: string
+  object: string
+  created: number
+  model: string
   choices: Array<{
+    index: number
     message: {
+      role: string
       content?: string
       tool_calls?: Array<{
         id: string
-        type: 'function'
+        type: string
         function: {
           name: string
           arguments: string
@@ -60,160 +238,14 @@ interface ChatResponse {
     }
     finish_reason: string
   }>
-  model: string
   usage?: {
-    input_tokens: number
-    output_tokens: number
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
   }
 }
 
-class LLMError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'LLMError'
-  }
-}
+// Export singleton instance
+export const llmTool = new LLMTool()
 
-class LLM {
-  private configManager = getConfigManager()
-
-  async execute(params: LLMParams): Promise<LLMResult> {
-    try {
-      const config = await this.configManager.loadConfig()
-      
-      const provider = params.provider || config.provider.name
-      const model = params.model || config.model.name
-      const messages = params.messages || []
-      const tools = params.tools
-      
-      console.log(`[LLM] Executing with provider: ${provider}, model: ${model}`)
-      
-      switch (provider.toLowerCase()) {
-        case 'zhipu':
-        case 'zhipuai':
-          return this.executeZhipu(model, messages, config, tools)
-        case 'openai':
-          return this.executeOpenAI(model, messages, config, tools)
-        default:
-          throw new LLMError(`Unsupported provider: ${provider}`)
-      }
-    } catch (error) {
-      console.error('[LLM] Execution error:', error)
-      throw error
-    }
-  }
-
-  private async executeZhipu(model: string, messages: Array<{ role: string; content: string; tool_call_id?: string; tool_calls?: any[] }>, config: any, tools?: any[]): Promise<LLMResult> {
-    const zhipuConfig = config.provider
-    const apiKey = zhipuConfig.apiKey
-    const baseURL = zhipuConfig.apiBase || 'https://open.bigmodel.cn/api/coding/paas/v4'
-    
-    if (!apiKey) {
-      throw new LLMError('Zhipu API key not configured')
-    }
-    
-    console.log('[LLM] Using Zhipu API:', baseURL)
-    console.log('[LLM] API Key:', apiKey)
-    
-    if (apiKey === 'test') {
-      console.log('[LLM] WARNING: Using test API Key!')
-    }
-    
-    const requestBody: any = {
-      model: model,
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: config.model.maxTokens || 1024
-    }
-    
-    if (tools && tools.length > 0) {
-      requestBody.tools = tools
-    }
-    
-    const response = await fetch(`${baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    })
-    
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new LLMError(`Zhipu API error: ${response.status} ${errorText}`)
-    }
-    
-    const data = await response.json() as ChatResponse
-    
-    if (!data.choices || data.choices.length === 0) {
-      throw new LLMError('No response from Zhipu API')
-    }
-    
-    const choice = data.choices[0]
-    
-    return {
-      content: choice.message?.content || '',
-      model: data.model || model,
-      usage: data.usage,
-      finish_reason: choice.finish_reason,
-      tool_calls: choice.message?.tool_calls
-    }
-  }
-
-  private async executeOpenAI(model: string, messages: Array<{ role: string; content: string; tool_call_id?: string; tool_calls?: any[] }>, config: any, tools?: any[]): Promise<LLMResult> {
-    const openaiConfig = config.provider
-    const apiKey = openaiConfig.apiKey
-    const baseURL = openaiConfig.baseURL || 'https://api.openai.com/v1'
-    
-    if (!apiKey) {
-      throw new LLMError('OpenAI API key not configured')
-    }
-    
-    console.log('[LLM] Using OpenAI API:', baseURL)
-    
-    const requestBody: any = {
-      model: model,
-      messages: messages,
-      temperature: 0.7,
-      max_tokens: config.model.maxTokens || 1024
-    }
-    
-    if (tools && tools.length > 0) {
-      requestBody.tools = tools
-    }
-    
-    const response = await fetch(`${baseURL}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(requestBody)
-    })
-    
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new LLMError(`OpenAI API error: ${response.status} ${errorText}`)
-    }
-    
-    const data = await response.json() as ChatResponse
-    
-    if (!data.choices || data.choices.length === 0) {
-      throw new LLMError('No response from OpenAI API')
-    }
-    
-    const choice = data.choices[0]
-    
-    return {
-      content: choice.message?.content || '',
-      model: data.model || model,
-      usage: data.usage,
-      finish_reason: choice.finish_reason,
-      tool_calls: choice.message?.tool_calls
-    }
-  }
-}
-
-const llm = new LLM()
-export default llm
+export default llmTool

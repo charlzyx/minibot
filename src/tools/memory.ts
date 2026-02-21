@@ -1,159 +1,230 @@
 import { getMemoryManager } from '../memory/manager'
+import type { ToolResult } from '@/types'
+import { ToolBase } from './base'
+import { createLogger } from '@/utils'
 
-interface MemoryParams {
-  action: 'store' | 'search' | 'get' | 'delete' | 'recent'
-  content?: string
-  query?: string
-  id?: number
+const logger = createLogger('MemoryTool')
+
+/**
+ * Memory tool parameters
+ */
+interface MemoryStoreParams {
+  action: 'store'
+  content: string
   tags?: string[]
+}
+
+interface MemorySearchParams {
+  action: 'search'
+  query: string
   limit?: number
 }
 
-export interface MemoryResult {
-  success: boolean
-  action: string
-  data?: any
-  error?: string
+interface MemoryGetParams {
+  action: 'get'
+  id: number
 }
 
-class MemoryTool {
-  async execute(params: MemoryParams): Promise<MemoryResult> {
+interface MemoryDeleteParams {
+  action: 'delete'
+  id: number
+}
+
+interface MemoryRecentParams {
+  action: 'recent'
+  limit?: number
+}
+
+type MemoryToolParams =
+  | MemoryStoreParams
+  | MemorySearchParams
+  | MemoryGetParams
+  | MemoryDeleteParams
+  | MemoryRecentParams
+
+/**
+ * Memory tool for memory management
+ */
+export class MemoryTool extends ToolBase<MemoryToolParams, unknown> {
+  readonly name = 'memory'
+  readonly description = 'Memory management: store, search, get, delete, and retrieve recent memories'
+  readonly parameters = {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['store', 'search', 'get', 'delete', 'recent'],
+        description: 'The memory operation to perform'
+      },
+      content: {
+        type: 'string',
+        description: 'Content to store (required for store action)'
+      },
+      query: {
+        type: 'string',
+        description: 'Search query (required for search action)'
+      },
+      id: {
+        type: 'number',
+        description: 'Memory ID (required for get and delete actions)'
+      },
+      tags: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Tags for categorization (optional for store action)'
+      },
+      limit: {
+        type: 'number',
+        description: 'Maximum number of results (optional for search and recent actions)'
+      }
+    },
+    required: ['action']
+  } as const
+
+  /**
+   * Execute memory operation
+   */
+  protected async executeImpl(
+    params: MemoryToolParams,
+    context?: unknown
+  ): Promise<unknown> {
     const memoryManager = getMemoryManager()
-    
-    try {
-      switch (params.action) {
-        case 'store':
-          return this.store(memoryManager, params)
-        case 'search':
-          return this.search(memoryManager, params)
-        case 'get':
-          return this.get(memoryManager, params)
-        case 'delete':
-          return this.delete(memoryManager, params)
-        case 'recent':
-          return this.recent(memoryManager, params)
-        default:
-          return {
-            success: false,
-            action: params.action,
-            error: `Unknown action: ${params.action}`
-          }
-      }
-    } catch (error) {
-      return {
-        success: false,
-        action: params.action,
-        error: error instanceof Error ? error.message : String(error)
-      }
+
+    switch (params.action) {
+      case 'store':
+        return await this.handleStore(memoryManager, params as MemoryStoreParams)
+
+      case 'search':
+        return await this.handleSearch(memoryManager, params as MemorySearchParams)
+
+      case 'get':
+        return await this.handleGet(memoryManager, params as MemoryGetParams)
+
+      case 'delete':
+        return await this.handleDelete(memoryManager, params as MemoryDeleteParams)
+
+      case 'recent':
+        return await this.handleRecent(memoryManager, params as MemoryRecentParams)
+
+      default:
+        throw new Error(`Unknown action: ${(params as { action: string }).action}`)
     }
   }
 
-  private async store(memoryManager: any, params: MemoryParams): Promise<MemoryResult> {
-    if (!params.content) {
-      return {
-        success: false,
-        action: 'store',
-        error: 'Content is required for store action'
-      }
-    }
+  /**
+   * Handle store action
+   */
+  private async handleStore(
+    memoryManager: Awaited<ReturnType<typeof getMemoryManager>>,
+    params: MemoryStoreParams
+  ): Promise<{ id: number; message: string }> {
+    const { content, tags = [] } = params
 
-    const id = await memoryManager.store(params.content, params.tags || [])
-    
+    logger.debug(`Storing memory`, { contentLength: content.length, tags })
+
+    const id = await memoryManager.store(content, tags)
+
+    logger.info(`Memory stored`, { id })
+
     return {
-      success: true,
-      action: 'store',
-      data: {
-        id,
-        content: params.content,
-        tags: params.tags || []
-      }
+      id,
+      message: `Memory stored successfully with ID: ${id}`
     }
   }
 
-  private async search(memoryManager: any, params: MemoryParams): Promise<MemoryResult> {
-    if (!params.query) {
-      return {
-        success: false,
-        action: 'search',
-        error: 'Query is required for search action'
-      }
+  /**
+   * Handle search action
+   */
+  private async handleSearch(
+    memoryManager: Awaited<ReturnType<typeof getMemoryManager>>,
+    params: MemorySearchParams
+  ): Promise<{ results: Array<{ id: number; content: string; tags: string[] }> }> {
+    const { query, limit = 10 } = params
+
+    logger.debug(`Searching memories`, { query, limit })
+
+    const memories = await memoryManager.search(query, limit)
+
+    logger.info(`Memory search complete`, { query, resultCount: memories.length })
+
+    const results = memories.map(m => ({
+      id: m.id,
+      content: m.content,
+      tags: m.tags
+    }))
+
+    return { results }
+  }
+
+  /**
+   * Handle get action
+   */
+  private async handleGet(
+    memoryManager: Awaited<ReturnType<typeof getMemoryManager>>,
+    params: MemoryGetParams
+  ): Promise<{ id: number; content: string; tags: string[] } | null> {
+    const { id } = params
+
+    logger.debug(`Getting memory`, { id })
+
+    const memory = await memoryManager.getById(id)
+
+    if (!memory) {
+      logger.warn(`Memory not found`, { id })
+      return null
     }
 
-    const limit = params.limit || 10
-    const results = await memoryManager.search(params.query, limit)
-    
     return {
-      success: true,
-      action: 'search',
-      data: {
-        query: params.query,
-        count: results.length,
-        results: results
-      }
+      id: memory.id,
+      content: memory.content,
+      tags: memory.tags
     }
   }
 
-  private async get(memoryManager: any, params: MemoryParams): Promise<MemoryResult> {
-    if (!params.id) {
-      return {
-        success: false,
-        action: 'get',
-        error: 'ID is required for get action'
-      }
-    }
+  /**
+   * Handle delete action
+   */
+  private async handleDelete(
+    memoryManager: Awaited<ReturnType<typeof getMemoryManager>>,
+    params: MemoryDeleteParams
+  ): Promise<{ message: string }> {
+    const { id } = params
 
-    const result = await memoryManager.getById(params.id)
-    
-    if (!result) {
-      return {
-        success: false,
-        action: 'get',
-        error: `Memory with ID ${params.id} not found`
-      }
-    }
+    logger.debug(`Deleting memory`, { id })
 
-    return {
-      success: true,
-      action: 'get',
-      data: result
-    }
+    await memoryManager.delete(id)
+
+    logger.info(`Memory deleted`, { id })
+
+    return { message: `Memory ${id} deleted successfully` }
   }
 
-  private async delete(memoryManager: any, params: MemoryParams): Promise<MemoryResult> {
-    if (!params.id) {
-      return {
-        success: false,
-        action: 'delete',
-        error: 'ID is required for delete action'
-      }
-    }
+  /**
+   * Handle recent action
+   */
+  private async handleRecent(
+    memoryManager: Awaited<ReturnType<typeof getMemoryManager>>,
+    params: MemoryRecentParams
+  ): Promise<{ results: Array<{ id: number; content: string; tags: string[] }> }> {
+    const { limit = 10 } = params
 
-    await memoryManager.delete(params.id)
-    
-    return {
-      success: true,
-      action: 'delete',
-      data: {
-        id: params.id,
-        message: 'Memory deleted successfully'
-      }
-    }
-  }
+    logger.debug(`Getting recent memories`, { limit })
 
-  private async recent(memoryManager: any, params: MemoryParams): Promise<MemoryResult> {
-    const limit = params.limit || 10
-    const results = await memoryManager.getRecent(limit)
-    
-    return {
-      success: true,
-      action: 'recent',
-      data: {
-        count: results.length,
-        results: results
-      }
-    }
+    const memories = await memoryManager.getRecent(limit)
+
+    logger.info(`Recent memories retrieved`, { count: memories.length })
+
+    const results = memories.map(m => ({
+      id: m.id,
+      content: m.content,
+      tags: m.tags
+    }))
+
+    return { results }
   }
 }
 
-const memoryTool = new MemoryTool()
+// Export singleton instance
+export const memoryTool = new MemoryTool()
+
 export default memoryTool

@@ -1,6 +1,6 @@
 {
   "name": "minibot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Minibot - Lightweight AI assistant with Hono + TypeScript",
   "type": "module",
   "main": "src/index.ts",
@@ -12,10 +12,16 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "test": "vitest",
+    "test:unit": "vitest run --dir tests/unit",
+    "test:integration": "vitest run --dir tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest --watch",
     "docs:dev": "vocs dev docs",
     "docs:build": "vocs build docs",
     "docs:preview": "vocs preview docs",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "lint": "echo \"Linting not configured yet\"",
+    "format": "echo \"Formatting not configured yet\""
   },
   "keywords": [
     "bot",
@@ -48,9 +54,10 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.24",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2",
+    "vitest": "^2.0.0",
     "vocs": "^1.4.1"
   }
 }
