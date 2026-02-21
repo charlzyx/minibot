@@ -101,49 +101,54 @@ export const defaultCommands: Command[] = [
         response += `任务: ${task}\n\n`
       }
 
-      // 在容器中运行
+      // 在独立容器中运行
       try {
-        const { runContainerAgent } = await import('../container-runner')
+        const { runCodeAssistant } = await import('../container-runner-docker')
 
-        const group = {
-          folder: 'workspace',
-          name: 'Code Assistant Container'
-        }
+        const task = args.length > 0 ? args.join(' ') : '准备就绪，等待指令'
 
-        const params = {
-          prompt: args.length > 0 ? args.join(' ') : '准备就绪，等待指令',
+        response += `🚀 正在启动独立容器...\n\n`
+        response += `📦 任务: ${task}\n\n`
+
+        logger.info('Starting code assistant container', { sessionId, task })
+
+        const result = await runCodeAssistant({
+          prompt: task,
           sessionId: sessionId,
-          groupFolder: 'workspace',
           chatJid: sessionId,
-          isMain: true
-        }
+          containerOptions: {
+            imageName: 'node:18-alpine',
+            memoryLimit: '512m',
+            timeout: 60000
+          },
+          onRegisterProcess: (containerId, containerName) => {
+            logger.info('Container registered', { containerId, containerName })
+            response += `🆔 容器 ID: ${containerId}\n\n`
+          },
+          onOutput: async (output) => {
+            logger.info('Container output received', { status: output.status })
+            if (output.status === 'success') {
+              response += `✅ 执行成功！\n\n`
+              response += `📦 输出:\n\`\`\`\n${output.result}\n\`\`\`\n\n`
+            } else {
+              response += `❌ 执行失败: ${output.error}\n\n`
+            }
+          }
+        })
 
-        const onRegisterProcess = (proc: ChildProcess, containerName: string, groupFolder: string) => {
-          logger.debug('Container process registered', { containerName, groupFolder })
-        }
-
-        const onOutput = async (output: Record<string, unknown>) => {
-          logger.debug('Container output', { output })
-        }
-
-        response += `🚀 正在启动容器...\n\n`
-
-        const result = await runContainerAgent(
-          group,
-          params,
-          onRegisterProcess,
-          onOutput
-        )
-
-        if (result.status === 'success') {
-          response += `✅ 容器启动成功！\n\n`
-          response += `📦 容器输出: ${result.result}\n\n`
-        } else {
-          response += `❌ 容器启动失败: ${result.error}\n\n`
+        // 如果 onOutput 没有添加响应，添加默认响应
+        if (!response.includes('执行成功') && !response.includes('执行失败')) {
+          if (result.status === 'success') {
+            response += `✅ 执行成功！\n\n`
+            response += `📦 输出:\n\`\`\`\n${result.result}\n\`\`\`\n\n`
+          } else {
+            response += `❌ 执行失败: ${result.error}\n\n`
+          }
         }
       } catch (error) {
         logger.error('Code assistant error', error, { sessionId })
         response += `❌ 启动容器时出错: ${error instanceof Error ? error.message : String(error)}\n\n`
+        response += `💡 提示: 请确保 Docker 已安装并运行\n\n`
       }
 
       response += `我现在可以帮助你完成以下任务：\n\n`

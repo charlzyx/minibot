@@ -16,7 +16,7 @@ Inspired by [nanobot](https://github.com/hkuds/nanobot), reimplemented with mode
 - ⏰ **Scheduled Tasks** - Cron-based task execution with workspace isolation
 - 🤖 **Subagent Architecture** - Distributed task execution and load balancing
 - 🔍 **Error Handling** - Intelligent error classification and retry mechanisms
-- 🐳 **Containerization** - Run agents in isolated containers for security and resource management
+- 🐳 **Docker Integration** - `/code` command runs in isolated containers with resource limits
 
 ## 🏗️ Architecture
 
