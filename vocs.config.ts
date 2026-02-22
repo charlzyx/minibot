@@ -8,18 +8,21 @@ export default defineConfig({
   title: 'Minibot',
   description: '轻量级 AI 助手 - 基于 Hono + TypeScript + Node.js',
   lang: 'zh-CN',
+  topNav: [
+    { text: '开始', link: '/guide/getting-started' },
+    { text: '功能指南', link: '/guide/code-assistant' },
+    { text: 'API', link: '/api/agent' }
+  ],
+  socials: [
+    {
+      icon: 'github',
+      link: 'https://github.com/charlzyx/minibot'
+    }
+  ],
   theme: {
     logo: {
       text: 'Minibot',
       image: '/minibot/logo.svg'
-    },
-    header: {
-      actions: [
-        {
-          text: 'GitHub',
-          link: 'https://github.com/charlzyx/minibot'
-        }
-      ]
     },
     sidebar: {
       '/': [
