@@ -97,6 +97,27 @@ export class Agent {
         tools: this.toolDefinitions
       })
 
+      // Handle LLM execution failure
+      if (!llmToolResult.success || !llmToolResult.data) {
+        const errorMsg = llmToolResult.error || 'LLM execution failed'
+        logger.error('LLM execution failed', { error: errorMsg })
+
+        // Friendly error messages
+        const friendlyMessages: Record<string, string> = {
+          '429': '😅 太热情啦！请稍等片刻再试，我需要休息一下。',
+          '401': '🔑 API 密钥配置有问题，请联系管理员。',
+          '403': '🚫 没有访问权限，请检查 API 配置。',
+          '500': '💥 服务暂时不可用，请稍后再试。'
+        }
+
+        // Extract error code if present
+        const codeMatch = errorMsg.match(/(\d{3})/)
+        const code = codeMatch ? codeMatch[1] : null
+
+        finalContent = friendlyMessages[code!] || friendlyMessages['500']
+        break
+      }
+
       const llmResult = llmToolResult.data
 
       logger.debug('LLM result received', {

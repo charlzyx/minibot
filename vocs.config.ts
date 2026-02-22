@@ -1,13 +1,17 @@
 import { defineConfig } from 'vocs'
 
+// Base path for GitHub Pages deployment
+// Repository: https://github.com/charlzyx/minibot
+// GitHub Pages: https://charlzyx.github.io/minibot/
 export default defineConfig({
+  basePath: '/minibot',
   title: 'Minibot',
   description: '轻量级 AI 助手 - 基于 Hono + TypeScript + Node.js',
   lang: 'zh-CN',
   theme: {
     logo: {
       text: 'Minibot',
-      image: '/logo.svg'
+      image: '/minibot/logo.svg'
     },
     header: {
       actions: [
@@ -99,7 +103,7 @@ export default defineConfig({
       tag: 'link',
       attrs: {
         rel: 'icon',
-        href: '/favicon.ico'
+        href: '/minibot/favicon.ico'
       }
     }
   ]
